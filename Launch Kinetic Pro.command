@@ -1,37 +1,31 @@
 #!/bin/zsh
-# Double-click this file in Finder to launch Kinetic Pro with zero manual setup!
+# Double-click in Finder to launch the native Kinetic Pro macOS app.
+# No browser, Node, or localhost server required.
 cd "$(dirname "$0")"
 
-echo "=== Kinetic Pro — Zero-Dependency Launcher ==="
+echo "=== Kinetic Pro — Native macOS Metal App ==="
 
-# 1. Clear macOS Gatekeeper quarantine flag (added when downloading ZIPs from GitHub in Safari/Chrome)
-#    and ensure native Apple Metal binaries are executable.
-if [ -d "Kinetic Pro.app" ]; then
-  xattr -cr "Kinetic Pro.app" 2>/dev/null || true
-  chmod +x "Kinetic Pro.app/Contents/MacOS/SpineForge" "Kinetic Pro.app/Contents/MacOS/spineforge-metal-cli" 2>/dev/null || true
-  # Re-seal the ad-hoc signature when a resource (e.g. the app icon) changed after signing,
-  # then nudge Finder to pick up the new icon.
-  if ! codesign --verify --deep "Kinetic Pro.app" >/dev/null 2>&1; then
-    codesign --force --deep --sign - "Kinetic Pro.app" >/dev/null 2>&1 && echo "[OK] Re-signed Kinetic Pro.app (ad hoc)"
-    touch "Kinetic Pro.app"
-  fi
-  echo "[OK] Launching Native Apple Metal 120Hz App: Kinetic Pro.app ..."
-  open "Kinetic Pro.app"
+APP="Kinetic Pro.app"
+if [ ! -d "$APP" ]; then
+  APP="SpineForge.app"
 fi
 
-# 2. Optionally start the WebGL2 Studio if Node.js is available
-export PATH="$HOME/.local/node/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-if command -v npm >/dev/null 2>&1; then
-  if [ ! -d "node_modules" ]; then
-    echo "[INFO] Installing Web Studio packages..."
-    npm install --no-audit --no-fund
-  fi
-  if ! lsof -ti :3460 >/dev/null 2>&1; then
-    echo "[OK] Starting WebGL2 Studio on http://127.0.0.1:3460 ..."
-    nohup npm run dev >/tmp/kinetic-web-studio.log 2>&1 &
-    sleep 2
-  fi
-  open "http://127.0.0.1:3460"
+if [ ! -d "$APP" ]; then
+  echo "[ERROR] Kinetic Pro.app not found next to this launcher."
+  echo "        On an Apple Silicon Mac, rebuild with: ./scripts/build-mac.sh"
+  exit 1
 fi
 
-echo "Done! Kinetic Pro is running."
+# Clear Gatekeeper quarantine (common after unzipping from GitHub) and ensure binaries are executable.
+xattr -cr "$APP" 2>/dev/null || true
+chmod +x "$APP/Contents/MacOS/SpineForge" "$APP/Contents/MacOS/spineforge-metal-cli" 2>/dev/null || true
+
+# Re-seal the ad-hoc signature when a resource (e.g. the app icon) changed after signing.
+if ! codesign --verify --deep "$APP" >/dev/null 2>&1; then
+  codesign --force --deep --sign - "$APP" >/dev/null 2>&1 && echo "[OK] Re-signed $APP (ad hoc)"
+  touch "$APP"
+fi
+
+echo "[OK] Opening native Apple Metal studio: $APP"
+open "$APP"
+echo "Done. Kinetic Pro is a standalone macOS app — not a web page."

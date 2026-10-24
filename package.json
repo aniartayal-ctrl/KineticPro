@@ -2,10 +2,12 @@
   "name": "kinetic",
   "version": "1.0.0",
   "private": true,
-  "description": "Kinetic Pro — Apple Metal 2D Mesh, Rigging, Weight-Painting & AI Animation Studio for Unity",
+  "description": "Kinetic Pro — Native macOS Apple Metal 2D Mesh, Rigging, Weight-Painting & AI Animation Studio for Unity",
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1 --port 3460",
+    "dev:web": "next dev --hostname 127.0.0.1 --port 3460",
     "build": "next build",
+    "build:mac": "zsh scripts/build-mac.sh",
     "start": "next start --hostname 127.0.0.1 --port 3460",
     "test": "tsx --test src/core/*.test.ts src/core/copilot/*.test.ts src/copilot/*.test.ts src/exporters/*.test.ts src/server/*.test.ts",
     "export:cli": "tsx src/cli/export.ts",

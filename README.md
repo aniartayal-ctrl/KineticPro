@@ -2,7 +2,7 @@
 
 # Kinetic Pro — Apple Metal 2D Mesh, Rigging & Slot Game Animation Suite for Unity
 
-**Kinetic Pro** is a standalone 2D skeletal, contour Delaunay mesh, weight-painting, and slot game animation studio built with **Apple Metal GPU acceleration (`Kinetic Pro.app`)**, a macOS pro-app style workspace, an **AI Copilot that runs every tool (Claude with native tool use, or an offline planner)**, and a **3-Way Unity & Spine 4.2 Export Engine**.
+**Kinetic Pro** is a **native macOS app** (`Kinetic Pro.app`) — not a website. It is a standalone 2D skeletal, contour Delaunay mesh, weight-painting, and slot game animation studio built with **Apple Metal GPU acceleration**, a SwiftUI pro-app workspace, an **AI Copilot**, and a **3-Way Unity & Spine 4.2 Export Engine**.
 
 📖 **[Read the Complete User Manual (`USER_MANUAL.md`)](./USER_MANUAL.md)**
 
@@ -37,7 +37,7 @@
 
 4. **Contour Delaunay Mesher, GPU Weight Painter & Liquify FFD (`W`)**
    - Alpha-silhouette marching contour tracer + Ramer-Douglas-Peucker simplifier + Steiner crease vertices + Delaunay triangulation.
-   - **Apple Metal Compute Kernel (`compute_auto_weights`)** & WebGL2 4-bone Linear Blend Skinning, interactive Weight Brush (`B`), Liquify FFD vertex sculpt (`W`), Onion Skinning, Motion Arcs, Weapon Slash Trails, and 3D Normal-Map Point Relighting.
+   - **Apple Metal Compute Kernel (`compute_auto_weights`)** & Metal 4-bone Linear Blend Skinning, interactive Weight Brush (`B`), Liquify FFD vertex sculpt (`W`), Onion Skinning, Motion Arcs, Weapon Slash Trails, and 3D Normal-Map Point Relighting.
 
 5. **Triple Unity & Spine 4.2 Export Pipeline + Zero-Dependency Unity C# Runtime (`com.spineforge.runtime`)**
    - **Zero-Dependency Unity Runtime**: Exports `<id>.sfrig.json` + `<id>.slotanim.json` + `<id>.png` with `SpineForgeAnimator.cs` (`MeshFilter`/`MeshRenderer`, 4-bone LBS, `PolygonCollider2D` hitboxes, multi-skins, and `OnAnimationEvent` triggers)—no Spine license required.
@@ -49,19 +49,33 @@
 
 ---
 
-## Quick Start
+## Quick Start (native macOS)
+
+Kinetic Pro ships as **`Kinetic Pro.app`**. Double-click it, or:
 
 ```bash
-# 1. Launch the native macOS app (from the repo folder)
+# Launch (also clears Gatekeeper quarantine after a GitHub unzip)
+open "Launch Kinetic Pro.command"
+# or:
 open "Kinetic Pro.app"
+```
 
-# 2. Start the web studio on http://127.0.0.1:3460 (bound to this machine only)
-npm run dev
+No browser, Node, or `localhost` server is required for day-to-day use.
 
-# 3. Run Unit Tests & Unity C# Runtime Verification
-npm run verify:all
+### Rebuild the Mac app (Apple Silicon + Xcode)
 
-# 4. Export All Presets via CLI
+```bash
+./scripts/build-mac.sh
+# → swift build -c release  +  packages Kinetic Pro.app
+```
+
+### Optional: developer web studio & tests
+
+The Next.js studio on port `3460` remains for automated UI tests and cross-platform CI. Artists should use the native app.
+
+```bash
+npm run dev:web          # http://127.0.0.1:3460 (this machine only)
+npm run verify:all       # unit tests + Unity C# runtime check
 npm run export:cli -- all
 ```
 
@@ -81,13 +95,15 @@ Each step reports ✓ or ✕ with the reason; invalid names or values are reject
 
 ### Projects
 
-**⌘S** saves to `projects/<id>/<id>.project.json` in the Kinetic folder (set `KINETIC_PROJECTS_DIR` to put it elsewhere, e.g. a synced drive). The shipped templates in `public/presets` are never written. Saves are atomic, and the previous 10 versions are kept in `projects/<id>/backups/`. PSD/PNG imports go to `projects/<id>/assets/`.
+**⌘S** (native Mac app or web studio) saves to `projects/<id>/<id>.project.json` in the Kinetic folder (set `KINETIC_PROJECTS_DIR` to put it elsewhere, e.g. a synced drive). The shipped templates in `public/presets` are never written. Saves are atomic; the web studio also keeps the previous 10 versions in `projects/<id>/backups/`. Art imports go to `projects/<id>/assets/`.
 
-**⌘O**, or a click on the document title, lists saved projects and the built-in templates. Opening a project with unsaved changes asks to Save, Don't Save or Cancel; the title shows "Edited" until you save. The copilot can do the same: "save", "open project sands", "show my projects". The `projects/` folder is git-ignored so saves never show up as code changes. The Mac app can load these files from its Open dialog.
+**⌘O** opens a saved project. In the Mac app, use **File → Open Project…** or drop a `.project.json` onto `Kinetic Pro.app`. Opening with unsaved changes asks to Save, Don't Save or Cancel. The `projects/` folder is git-ignored.
 
 ### Autosave and recovery
 
-Work is autosaved to the browser every 5 minutes when something changed, and immediately when the tab is hidden or closed or an error occurs. On the next launch the studio offers to restore it. If a panel fails, only that panel shows an error (with Reload) while the rest keeps running.
+**Native Mac app:** ⌘S writes to `projects/<id>/`; quitting with edits asks Save / Don’t Save / Cancel.
+
+**Optional web studio:** Work is autosaved in the browser every 5 minutes when something changed, and immediately when the tab is hidden or closed or an error occurs. On the next launch the studio offers to restore it.
 
 ### Testing
 
@@ -99,7 +115,7 @@ Work is autosaved to the browser every 5 minutes when something changed, and imm
 
 ### App icon
 
-The icon draws the K's stem and leg, leaves the upper arm to the eye, and puts the AI spark where it would end. `scripts/brand.mjs` holds its geometry; `npm run brand` rewrites every size from it: favicon, Apple touch icon, title bar, brand marks and the Mac app's `AppIcon.icns`. After the Mac icon changes, open the app once with `Launch Kinetic Pro.command` (it re-signs the bundle) or rebuild it with `python3 scripts/package-mac-app.py`.
+The icon draws the K's stem and leg, leaves the upper arm to the eye, and puts the AI spark where it would end. `scripts/brand.mjs` holds its geometry; `npm run brand` rewrites every size from it: favicon, Apple touch icon, title bar, brand marks and the Mac app's `AppIcon.icns`. After icon or Swift changes, rebuild on a Mac with `./scripts/build-mac.sh` (or re-sign with `Launch Kinetic Pro.command` if only resources changed).
 
 ### AI Copilot keys and models
 

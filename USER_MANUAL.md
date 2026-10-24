@@ -126,16 +126,27 @@ When you click **`Export Unity`** and download `<id>-unity-bundle.zip`, you get 
 
 ---
 
-## 6. Native macOS Apple Metal App & CLI
+## 6. Native macOS Apple Metal App (primary product)
 
-- **Launch Native App**:
+Kinetic Pro is a **native macOS application**. Day-to-day work happens in **`Kinetic Pro.app`** — not in a browser.
+
+- **Launch**:
   ```bash
-  open "/Users/amit.tayal/Kinetic/Kinetic Pro.app"
+  open "Kinetic Pro.app"
+  # or double-click:
+  open "Launch Kinetic Pro.command"
   ```
-- **Run Headless Apple Metal GPU Exporter (`~219ms` for 187+ frames)**:
+- **File menu**: Import Art (O), Open Project (⌘O), Save (⌘S), Save As (⇧⌘S), Export (⌘E). Projects land in `projects/<id>/` next to the app (or under Documents/KineticPro when installed to `/Applications`). Drop a `.project.json` or PNG/WebP onto the app icon to open/import.
+- **Rebuild** (after pulling Swift changes; requires Apple Silicon + Xcode):
   ```bash
-  "/Users/amit.tayal/Kinetic/Kinetic Pro.app/Contents/MacOS/spineforge-metal-cli" export-all \
-    /Users/amit.tayal/Kinetic/exports/astral-forge/astral-forge.project.json \
-    /Users/amit.tayal/Kinetic/public \
-    /Users/amit.tayal/Kinetic/exports/astral-forge-native-metal 220 12
+  ./scripts/build-mac.sh
   ```
+- **Headless Apple Metal GPU Exporter** (`~219ms` for 187+ frames):
+  ```bash
+  "./Kinetic Pro.app/Contents/MacOS/spineforge-metal-cli" export-all \
+    ./exports/astral-forge/astral-forge.project.json \
+    ./public \
+    ./exports/astral-forge-native-metal 220 12
+  ```
+
+The optional Next.js studio (`npm run dev:web`) is for automated tests and CI only.

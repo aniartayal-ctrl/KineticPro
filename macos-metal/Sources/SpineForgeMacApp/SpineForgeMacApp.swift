@@ -163,10 +163,20 @@ public final class MacStudioViewModel: ObservableObject {
     @Published public var statusMessage: String = "120Hz ProMotion Apple Metal Pipeline Active"
     @Published public var history: [SfProject] = []
     @Published public var historyIndex: Int = 0
+    @Published public var currentProjectURL: URL? = nil
+    @Published public var isDirty: Bool = false
 
     public var renderer: MetalRigRenderer?
     public let workspaceRootURL: URL
-    public let publicRootURL: URL
+    public let bundledPublicRootURL: URL
+    public var publicRootURL: URL
+
+    public var projectsDirURL: URL {
+        if let env = ProcessInfo.processInfo.environment["KINETIC_PROJECTS_DIR"], !env.isEmpty {
+            return URL(fileURLWithPath: env)
+        }
+        return workspaceRootURL.appendingPathComponent("projects")
+    }
 
     public init() {
         let envRoot = ProcessInfo.processInfo.environment["KINETIC_ROOT"] ?? ProcessInfo.processInfo.environment["SPINEFORGE_ROOT"]
@@ -182,26 +192,37 @@ public final class MacStudioViewModel: ObservableObject {
         let rootURL = envRoot != nil ? URL(fileURLWithPath: envRoot!) : fallbackRoot
         self.workspaceRootURL = rootURL
 
+        let bundled: URL
         if let resourceURL = Bundle.main.resourceURL,
            FileManager.default.fileExists(atPath: resourceURL.appendingPathComponent("presets").path) {
-            self.publicRootURL = resourceURL
+            bundled = resourceURL
         } else {
-            self.publicRootURL = rootURL.appendingPathComponent("public")
+            bundled = rootURL.appendingPathComponent("public")
         }
+        self.bundledPublicRootURL = bundled
+        self.publicRootURL = bundled
 
-        let initialProj = Self.loadProjectFile(id: "astral-forge", rootURL: rootURL, publicRootURL: publicRootURL)
+        let initialProj = Self.loadProjectFile(id: "astral-forge", rootURL: rootURL, publicRootURL: bundled)
         self.project = initialProj
         self.history = [initialProj]
         self.historyIndex = 0
 
         do {
-            let r = try MetalRigRenderer(project: initialProj, publicRootURL: publicRootURL)
+            let r = try MetalRigRenderer(project: initialProj, publicRootURL: bundled)
             self.renderer = r
             self.gpuDeviceName = r.device.name
             self.gpuUnifiedMemory = r.device.hasUnifiedMemory
         } catch {
             self.statusMessage = "Metal init warning: \(error.localizedDescription)"
         }
+
+        let projectsPath: URL
+        if let env = ProcessInfo.processInfo.environment["KINETIC_PROJECTS_DIR"], !env.isEmpty {
+            projectsPath = URL(fileURLWithPath: env)
+        } else {
+            projectsPath = rootURL.appendingPathComponent("projects")
+        }
+        try? FileManager.default.createDirectory(at: projectsPath, withIntermediateDirectories: true)
     }
 
     public static func loadProjectFile(id: String, rootURL: URL, publicRootURL: URL) -> SfProject {
@@ -234,14 +255,23 @@ public final class MacStudioViewModel: ObservableObject {
 
     public func loadPreset(id: String) {
         selectedPreset = id
-        let loaded = Self.loadProjectFile(id: id, rootURL: workspaceRootURL, publicRootURL: publicRootURL)
-        applyLoadedProject(loaded)
+        currentProjectURL = nil
+        publicRootURL = bundledPublicRootURL
+        let loaded = Self.loadProjectFile(id: id, rootURL: workspaceRootURL, publicRootURL: bundledPublicRootURL)
+        applyLoadedProject(loaded, assetsRoot: bundledPublicRootURL, projectURL: nil)
     }
 
-    public func applyLoadedProject(_ next: SfProject) {
+    public func applyLoadedProject(_ next: SfProject, assetsRoot: URL? = nil, projectURL: URL? = nil) {
+        if let assetsRoot {
+            publicRootURL = assetsRoot
+        }
+        if projectURL != nil {
+            currentProjectURL = projectURL
+        }
         self.project = next
         self.history = [next]
         self.historyIndex = 0
+        self.isDirty = false
         self.selectedBone = next.bones.dropFirst().first?.name ?? next.bones.first?.name ?? "root"
         self.selectedPart = next.parts.first(where: { ($0.skin?.count ?? 0) > 1 })?.name ?? next.parts.first?.name ?? ""
         self.activeClip = next.animations["strike"] != nil ? "strike" : (next.animations.keys.sorted().first ?? "idle")
@@ -255,6 +285,7 @@ public final class MacStudioViewModel: ObservableObject {
         let sliced = Array(history.prefix(historyIndex + 1)).suffix(24)
         history = Array(sliced) + [project]
         historyIndex = history.count - 1
+        isDirty = true
     }
 
     public func undo() {
@@ -489,13 +520,191 @@ public final class MacStudioViewModel: ObservableObject {
     public func openProjectDialog() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
-        panel.message = "Select a .project.json file"
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Open a Kinetic Pro .project.json"
+        panel.directoryURL = projectsDirURL
         if panel.runModal() == .OK, let url = panel.url {
-            if let data = try? Data(contentsOf: url),
-               let loaded = try? JSONDecoder().decode(SfProject.self, from: data) {
-                applyLoadedProject(loaded)
+            openProject(at: url)
+        }
+    }
+
+    public func openProject(at url: URL) {
+        guard let data = try? Data(contentsOf: url),
+              let loaded = try? JSONDecoder().decode(SfProject.self, from: data) else {
+            statusMessage = "Could not open project: \(url.lastPathComponent)"
+            return
+        }
+        // Assets live next to the project file (projects/<id>/) or under bundled presets.
+        let folder = url.deletingLastPathComponent()
+        let hasLocalAssets = FileManager.default.fileExists(atPath: folder.appendingPathComponent("assets").path)
+            || FileManager.default.fileExists(atPath: folder.appendingPathComponent("presets").path)
+            || loaded.src.hasPrefix("assets/")
+        let assetsRoot = hasLocalAssets ? folder : bundledPublicRootURL
+        selectedPreset = loaded.id
+        applyLoadedProject(loaded, assetsRoot: assetsRoot, projectURL: url)
+    }
+
+    @discardableResult
+    public func saveProject() -> Bool {
+        if let url = currentProjectURL {
+            return writeProject(to: url)
+        }
+        return saveProjectAs()
+    }
+
+    @discardableResult
+    public func saveProjectAs() -> Bool {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "\(project.id).project.json"
+        panel.directoryURL = projectsDirURL.appendingPathComponent(project.id)
+        panel.message = "Save Kinetic Pro project"
+        try? FileManager.default.createDirectory(at: panel.directoryURL!, withIntermediateDirectories: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return false }
+        return writeProject(to: url)
+    }
+
+    private func writeProject(to url: URL) -> Bool {
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(project)
+            let tmp = url.appendingPathExtension("tmp")
+            try data.write(to: tmp, options: .atomic)
+            if FileManager.default.fileExists(atPath: url.path) {
+                _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
+            } else {
+                try FileManager.default.moveItem(at: tmp, to: url)
+            }
+            currentProjectURL = url
+            isDirty = false
+            statusMessage = "Saved \(url.lastPathComponent)"
+            return true
+        } catch {
+            statusMessage = "Save failed: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    public func importArtDialog() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .webP, .jpeg, .tiff, .pdf]
+        if let psd = UTType(filenameExtension: "psd") {
+            panel.allowedContentTypes.append(psd)
+        }
+        panel.allowsMultipleSelection = false
+        panel.message = "Import character art (PNG / WebP / PSD). Flat images auto-rig as a single layer."
+        guard panel.runModal() == .OK, let sourceURL = panel.url else { return }
+        importArt(from: sourceURL)
+    }
+
+    public func importArt(from sourceURL: URL) {
+        guard let nsImg = NSImage(contentsOf: sourceURL),
+              let cgImg = nsImg.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            statusMessage = "Could not read image: \(sourceURL.lastPathComponent)"
+            return
+        }
+
+        let stem = sourceURL.deletingPathExtension().lastPathComponent
+            .lowercased()
+            .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let id = stem.isEmpty ? "imported-\(Int(Date().timeIntervalSince1970))" : stem
+        let projectDir = projectsDirURL.appendingPathComponent(id)
+        let assetsDir = projectDir.appendingPathComponent("assets")
+        do {
+            try FileManager.default.createDirectory(at: assetsDir, withIntermediateDirectories: true)
+        } catch {
+            statusMessage = "Could not create projects/\(id): \(error.localizedDescription)"
+            return
+        }
+
+        let ext = sourceURL.pathExtension.lowercased().isEmpty ? "png" : sourceURL.pathExtension.lowercased()
+        let destName = "hero.\(ext == "psd" ? "png" : ext)"
+        let destURL = assetsDir.appendingPathComponent(destName)
+
+        if ext == "psd" {
+            // Flatten PSD via CoreGraphics when possible; otherwise copy bytes.
+            if let dest = CGImageDestinationCreateWithURL(destURL as CFURL, UTType.png.identifier as CFString, 1, nil) {
+                CGImageDestinationAddImage(dest, cgImg, nil)
+                CGImageDestinationFinalize(dest)
+            } else {
+                try? FileManager.default.copyItem(at: sourceURL, to: destURL)
+            }
+        } else {
+            try? FileManager.default.removeItem(at: destURL)
+            do {
+                try FileManager.default.copyItem(at: sourceURL, to: destURL)
+            } catch {
+                statusMessage = "Import copy failed: \(error.localizedDescription)"
+                return
             }
         }
+
+        let w = cgImg.width
+        let h = cgImg.height
+        let rel = "assets/\(destName)"
+        let body = SfPart(
+            name: "body",
+            src: rel,
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 1,
+            bone: "hips",
+            skin: ["hips", "chest", "head"],
+            swap: nil,
+            meshDensity: "medium",
+            mesh: nil
+        )
+        let bones: [SfBone] = [
+            SfBone(name: "root", x: 0.5, y: 0.96, length: 0.04, color: "#7fd8ff"),
+            SfBone(name: "hips", parent: "root", x: 0.5, y: 0.62, length: 0.12, color: "#f3c969"),
+            SfBone(name: "chest", parent: "hips", x: 0.5, y: 0.42, length: 0.14, color: "#7fd8ff"),
+            SfBone(name: "head", parent: "chest", x: 0.5, y: 0.18, length: 0.1, color: "#ff9f7a"),
+            SfBone(name: "arm", parent: "chest", x: 0.68, y: 0.4, length: 0.12, color: "#9ae6b4"),
+            SfBone(name: "forearm", parent: "arm", x: 0.82, y: 0.48, length: 0.1, color: "#68d391")
+        ]
+        let imported = SfProject(
+            version: "1.0.0",
+            id: id,
+            title: stem.replacingOccurrences(of: "-", with: " ").capitalized,
+            src: rel,
+            width: w,
+            height: h,
+            action: "idle",
+            frame: SfFrameMargin(left: 0.2, top: 0.1, right: 0.2, bottom: 0.05),
+            palette: SfPalette(rim: "#7fd8ff", flash: "#f3c969"),
+            bones: bones,
+            ikConstraints: [
+                SfIkConstraint(name: "arm-ik", bones: ["arm", "forearm"], target: "ik-hand", bendPositive: true, mix: 1.0)
+            ],
+            parts: [body],
+            animations: [:]
+        )
+
+        // Ensure IK target bone exists
+        var withIk = imported
+        if !withIk.bones.contains(where: { $0.name == "ik-hand" }) {
+            withIk.bones.append(SfBone(name: "ik-hand", parent: nil, x: 0.9, y: 0.55, length: 0.02, color: "#fc8181"))
+        }
+
+        let projectURL = projectDir.appendingPathComponent("\(id).project.json")
+        selectedPreset = id
+        applyLoadedProject(withIk, assetsRoot: projectDir, projectURL: projectURL)
+        regenerateProceduralClipsNatively()
+        runAppleVisionAutoRig()
+        pushHistorySnapshot()
+        _ = writeProject(to: projectURL)
+        mode = .animate
+        statusMessage = "Imported '\(withIk.title)' → projects/\(id) (Vision auto-rig on \(gpuDeviceName))"
+    }
+
+    public func revealProjectsInFinder() {
+        NSWorkspace.shared.open(projectsDirURL)
     }
 }
 
@@ -947,12 +1156,22 @@ public struct SpineForgeMainStudioView: View {
                                 }
                                 .labelsHidden()
 
-                                Button("Import Custom .PSD / .PNG...") {
-                                    vm.openProjectDialog()
+                                Button("Import Art (.PNG / .WebP / .PSD)...") {
+                                    vm.importArtDialog()
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .tint(.cyan)
                                 .controlSize(.small)
+
+                                Button("Open Saved Project…") {
+                                    vm.openProjectDialog()
+                                }
+                                .controlSize(.small)
+
+                                Button("Reveal Projects Folder") {
+                                    vm.revealProjectsInFinder()
+                                }
+                                .controlSize(.mini)
                             }
                             .padding(10)
                             .background(Color.black.opacity(0.28))
@@ -1508,16 +1727,27 @@ public struct SpineForgeMainStudioView: View {
 }
 
 @main
-struct SpineForgeMacApplication: App {
+struct KineticProMacApplication: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var vm = MacStudioViewModel()
 
     var body: some Scene {
-        WindowGroup("Kinetic Pro — Apple Metal 2D Mesh, Rigging & AI Studio") {
+        WindowGroup("Kinetic Pro") {
             SpineForgeMainStudioView(vm: vm)
+                .onAppear { appDelegate.viewModel = vm }
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("Import Art…") { vm.importArtDialog() }
+                    .keyboardShortcut("o", modifiers: [])
+                Button("Open Project…") { vm.openProjectDialog() }
+                    .keyboardShortcut("o", modifiers: [.command])
+                Button("Save Project") { _ = vm.saveProject() }
+                    .keyboardShortcut("s", modifiers: [.command])
+                Button("Save Project As…") { _ = vm.saveProjectAs() }
+                    .keyboardShortcut("s", modifiers: [.command, .shift])
+            }
             CommandMenu("Rig & Mesh") {
                 Button("Move / Free Transform Pose (V)") { vm.mode = .animate }
                     .keyboardShortcut("1", modifiers: [.command])
@@ -1527,10 +1757,15 @@ struct SpineForgeMacApplication: App {
                     .keyboardShortcut("3", modifiers: [.command])
                 Button("GPU Weight Paint Brush (B)") { vm.mode = .weights }
                     .keyboardShortcut("4", modifiers: [.command])
+                Button("1-Click Auto Rig (Vision)") {
+                    vm.runAppleVisionAutoRig()
+                    vm.pushHistorySnapshot()
+                }
+                .keyboardShortcut("a", modifiers: [.shift])
                 Divider()
-                Button("Toggle Extreme-Right AI Copilot") { vm.showAiCopilot.toggle() }
+                Button("Toggle AI Copilot") { vm.showAiCopilot.toggle() }
                     .keyboardShortcut("k", modifiers: [.command])
-                Button("Export Complete Unity + Spine 4.2 Bundle...") {
+                Button("Export Unity + Spine 4.2 Bundle…") {
                     vm.bakeAndExportOnMetal(revealInFinder: true)
                 }
                 .keyboardShortcut("e", modifiers: [.command])
@@ -1540,12 +1775,43 @@ struct SpineForgeMacApplication: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    weak var viewModel: MacStudioViewModel?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
+        NSApp.windows.first?.title = "Kinetic Pro"
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return true
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard let url = urls.first, let vm = viewModel else { return }
+        let ext = url.pathExtension.lowercased()
+        if ext == "json" {
+            vm.openProject(at: url)
+        } else {
+            vm.importArt(from: url)
+        }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let vm = viewModel, vm.isDirty else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "Save changes to “\(vm.project.title)”?"
+        alert.informativeText = "Your Metal rig, weights, and clips have unsaved edits."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return vm.saveProject() ? .terminateNow : .terminateCancel
+        case .alertSecondButtonReturn:
+            return .terminateNow
+        default:
+            return .terminateCancel
+        }
     }
 }

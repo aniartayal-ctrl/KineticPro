@@ -65,6 +65,14 @@ public struct SfIkConstraint: Codable, Equatable, Identifiable {
     public var target: String
     public var bendPositive: Bool
     public var mix: Float
+
+    public init(name: String, bones: [String], target: String, bendPositive: Bool = true, mix: Float = 1.0) {
+        self.name = name
+        self.bones = bones
+        self.target = target
+        self.bendPositive = bendPositive
+        self.mix = mix
+    }
 }
 
 public struct SfPartMesh: Codable, Equatable {
@@ -95,6 +103,32 @@ public struct SfPart: Codable, Equatable, Identifiable {
     public var swap: SfSwapRule?
     public var meshDensity: String?
     public var mesh: SfPartMesh?
+
+    public init(
+        name: String,
+        src: String,
+        x: Float,
+        y: Float,
+        w: Float,
+        h: Float,
+        bone: String? = nil,
+        skin: [String]? = nil,
+        swap: SfSwapRule? = nil,
+        meshDensity: String? = nil,
+        mesh: SfPartMesh? = nil
+    ) {
+        self.name = name
+        self.src = src
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+        self.bone = bone
+        self.skin = skin
+        self.swap = swap
+        self.meshDensity = meshDensity
+        self.mesh = mesh
+    }
 }
 
 public struct SfTransformKey: Codable, Equatable {
