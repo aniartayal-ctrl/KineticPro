@@ -1,6 +1,7 @@
-#!/bin/zsh
+#!/usr/bin/env bash
 # Build and package Kinetic Pro.app on macOS (Apple Silicon / Metal).
 # Usage: ./scripts/build-mac.sh
+# Must run on Amit's Mac (or any Darwin host with Xcode) — not on Linux cloud VMs.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -8,6 +9,8 @@ cd "$ROOT"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "build-mac.sh must run on macOS with Xcode / Swift 5.10+."
+  echo "On Amit's MacBook Air (KineticPro worker):"
+  echo "  cd ~/KineticPro && git checkout cursor/native-macos-app-f381 && ./scripts/build-mac.sh"
   exit 1
 fi
 
