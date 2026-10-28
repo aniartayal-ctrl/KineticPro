@@ -18,7 +18,7 @@ import {
   EASE_SINE_IN_OUT,
   generateProceduralClips,
 } from "./animator";
-import { autoRigProject } from "./auto-rigger";
+import { addCreatureTracks, autoRigProject, isCreatureProject } from "./auto-rigger";
 import { snapClipToFrames } from "./keyframes";
 import type {
   AnimationClip,
@@ -894,6 +894,7 @@ export function runFullAutoModePipeline(
 
   // 3. Synthesize all 14 Famous Slot & Game Action Clips with 12 Principles applied
   rigged.animations = synthesizeAllFamousGameClips(rigged, principles);
+  if (isCreatureProject(rigged)) rigged.animations = addCreatureTracks(rigged.animations, rigged);
 
   return {
     project: rigged,

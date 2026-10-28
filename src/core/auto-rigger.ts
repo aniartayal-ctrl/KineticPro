@@ -7,8 +7,16 @@
  * Apple Vision (`VNDetectHumanBodyPoseRequest`) pose landmarks.
  */
 
-import { generateProceduralClips } from "./animator";
-import { RIG_BONE_PALETTE, type RigBone, type RigIkConstraint, type RigPart, type SpineForgeProject } from "./schema";
+import { EASE_SINE_IN_OUT, generateProceduralClips } from "./animator";
+import {
+  RIG_BONE_PALETTE,
+  type AnimationClip,
+  type RigBone,
+  type RigIkConstraint,
+  type RigPart,
+  type SpineForgeProject,
+  type TransformKey,
+} from "./schema";
 import { buildPartMesh } from "./weights";
 
 export type PoseLandmarkMap = Partial<
@@ -35,6 +43,7 @@ export function autoRigProject(
   landmarks?: PoseLandmarkMap,
   options: { meshDensity?: "low" | "medium" | "high"; weightMode?: "hybrid" | "heat" | "capsule" } = {},
 ): SpineForgeProject {
+  if (isCreatureProject(project)) return autoRigCreature(project, options);
   const byName = new Map<string, RigPart>(project.parts.map((p) => [p.name.toLowerCase(), p]));
 
   const findPart = (...keywords: string[]): RigPart | undefined => {
@@ -281,4 +290,176 @@ export function autoRigProject(
   }
   nextProject.animations = generateProceduralClips(nextProject);
   return nextProject;
+}
+
+const SIDE = /(?:^|[-_ ])(l|r|left|right)$/i;
+
+/** "wing_L" -> "l", "arm-right" -> "r", "tail" -> undefined. */
+function partSide(name: string): "l" | "r" | undefined {
+  const m = SIDE.exec(name);
+  if (!m) return undefined;
+  return m[1]!.toLowerCase().startsWith("l") ? "l" : "r";
+}
+
+const r4 = (v: number) => Number(v.toFixed(4));
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/** Point of the part's box nearest to `[x, y]`: where a limb meets the body. */
+function attachPoint(p: RigPart, [x, y]: [number, number]): [number, number] {
+  return [r4(clamp(x, p.x, p.x + p.w)), r4(clamp(y, p.y, p.y + p.h))];
+}
+
+/** Box corner farthest from `from`: the free end of a wing or tail. */
+function farCorner(p: RigPart, [x, y]: [number, number]): [number, number] {
+  const corners: [number, number][] = [
+    [p.x, p.y],
+    [p.x + p.w, p.y],
+    [p.x, p.y + p.h],
+    [p.x + p.w, p.y + p.h],
+  ];
+  return corners.reduce((best, c) => (Math.hypot(c[0] - x, c[1] - y) > Math.hypot(best[0] - x, best[1] - y) ? c : best));
+}
+
+const lerp2 = (a: [number, number], b: [number, number], t: number): [number, number] => [r4(a[0] + (b[0] - a[0]) * t), r4(a[1] + (b[1] - a[1]) * t)];
+
+/** Wings or a tail mean a creature (dragon, bird, beast), not a humanoid hero. */
+export function isCreatureProject(project: Pick<SpineForgeProject, "parts">): boolean {
+  return project.parts.some((p) => /wing|tail/i.test(p.name) && !/cape-tail|ponytail/i.test(p.name));
+}
+
+/**
+ * Creature rig: body splits into `hips` / `chest`, `head` sits at the neck, and wings, tail, mane and
+ * fins get spring chains anchored where each part meets the body. Front limbs reuse the humanoid
+ * `arm` / `arm-back` names so the standard clips move them too.
+ */
+function autoRigCreature(
+  project: SpineForgeProject,
+  options: { meshDensity?: "low" | "medium" | "high"; weightMode?: "hybrid" | "heat" | "capsule" },
+): SpineForgeProject {
+  const parts = project.parts;
+  const find = (re: RegExp, side?: "l" | "r") => parts.find((p) => re.test(p.name) && (side === undefined || partSide(p.name) === side));
+  const body = find(/body|torso|chest/) ?? parts.reduce((a, b) => (b.w * b.h > a.w * a.h ? b : a));
+  const head = find(/head|face/);
+
+  const bodyCenter = partCenter(body);
+  const chestPivot: [number, number] = [bodyCenter[0], r4(body.y + body.h * 0.3)];
+  const hipsPivot: [number, number] = [bodyCenter[0], r4(body.y + body.h * 0.68)];
+  const bottom = Math.max(...parts.map((p) => p.y + p.h));
+
+  const bones: RigBone[] = [
+    { name: "root", x: bodyCenter[0], y: r4(Math.min(0.99, bottom)), color: RIG_BONE_PALETTE[0] },
+    { name: "hips", parent: "root", x: hipsPivot[0], y: hipsPivot[1], color: RIG_BONE_PALETTE[1] },
+    { name: "chest", parent: "hips", x: chestPivot[0], y: chestPivot[1], color: RIG_BONE_PALETTE[2] },
+  ];
+  let paletteIndex = 3;
+  const add = (bone: Omit<RigBone, "color">) => {
+    bones.push({ ...bone, color: RIG_BONE_PALETTE[paletteIndex++ % RIG_BONE_PALETTE.length] });
+    return bone.name;
+  };
+  const binding = new Map<RigPart, Pick<RigPart, "bone" | "skin">>();
+
+  if (head) {
+    const neck = attachPoint(head, chestPivot);
+    add({ name: "head", parent: "chest", x: neck[0], y: neck[1] });
+    binding.set(head, { bone: "head" });
+  }
+  const headBone = head ? "head" : "chest";
+  const headCenter = head ? partCenter(head) : chestPivot;
+
+  /** Two- or three-bone spring chain from where `part` meets `anchor` out to its far corner. */
+  const chain = (part: RigPart, name: string, parent: string, anchor: [number, number], links: number, spring: RigBone["spring"]) => {
+    const base = attachPoint(part, anchor);
+    const tip = farCorner(part, base);
+    const names: string[] = [];
+    for (let i = 0; i < links; i++) {
+      const at = lerp2(base, tip, i / links);
+      const length = r4(Math.hypot(tip[0] - base[0], tip[1] - base[1]) / links);
+      names.push(add({ name: i === 0 ? name : `${name}-${i + 1}`, parent: i === 0 ? parent : names[i - 1], x: at[0], y: at[1], length, spring: i === 0 ? undefined : spring }));
+    }
+    binding.set(part, { skin: names });
+  };
+
+  for (const side of ["l", "r"] as const) {
+    const wing = find(/wing/, side);
+    if (wing) chain(wing, `wing-${side}`, "chest", chestPivot, 2, { stiffness: 60, damping: 7, gain: [6, 4], wind: 1.4 });
+  }
+  const tail = find(/tail/);
+  if (tail) chain(tail, "tail", "hips", hipsPivot, 3, { stiffness: 46, damping: 5, gain: [9, 4], wind: 2.1 });
+  const mane = find(/mane|hair/);
+  if (mane) chain(mane, "mane", headBone, headCenter, 2, { stiffness: 54, damping: 5, gain: [7, 3], wind: 1.8 });
+  const spines = find(/spine|fin-back|crest/);
+  if (spines) {
+    const at = attachPoint(spines, chestPivot);
+    binding.set(spines, { bone: add({ name: "spines", parent: "chest", x: at[0], y: at[1], spring: { stiffness: 70, damping: 8, gain: [4, 2], wind: 1.0 } }) });
+  }
+  const mouth = find(/mouth|jaw/);
+  if (mouth) binding.set(mouth, { bone: add({ name: "jaw", parent: headBone, x: r4(mouth.x + mouth.w * 0.5), y: r4(mouth.y + mouth.h * 0.2) }) });
+
+  for (const side of ["l", "r"] as const) {
+    const fin = find(/ear|fin(?!-back)/, side);
+    if (fin && fin !== spines) {
+      const at = attachPoint(fin, headCenter);
+      binding.set(fin, { bone: add({ name: `earfin-${side}`, parent: headBone, x: at[0], y: at[1], spring: { stiffness: 64, damping: 6, gain: [6, 3], wind: 1.5 } }) });
+    }
+    // The character's left limb is the far one in a three-quarter view, like `arm-back` on a hero.
+    const arm = find(/arm|claw|hand/, side);
+    if (arm) binding.set(arm, { bone: add({ name: side === "l" ? "arm" : "arm-back", parent: "chest", x: r4(arm.x + arm.w * 0.5), y: r4(arm.y + arm.h * 0.12) }) });
+    const leg = find(/leg|foot/, side);
+    if (leg) binding.set(leg, { bone: add({ name: `leg-${side}`, parent: "hips", x: r4(leg.x + leg.w * 0.5), y: r4(leg.y + leg.h * 0.18) }) });
+  }
+
+  const density = options.meshDensity ?? "high";
+  const updatedParts: RigPart[] = parts.map((part) => {
+    const bound = part === body ? { skin: ["hips", "chest"] } : (binding.get(part) ?? { bone: /eye|horn|brow|lid/i.test(part.name) ? headBone : "chest" });
+    return { ...part, meshDensity: density, mesh: undefined, bone: bound.bone, skin: bound.skin };
+  });
+
+  const nextProject: SpineForgeProject = { ...project, bones, ikConstraints: [], parts: updatedParts };
+  for (const part of nextProject.parts) {
+    part.mesh = buildPartMesh(nextProject, part, { weightMode: options.weightMode ?? "hybrid" });
+  }
+  nextProject.animations = addCreatureTracks(generateProceduralClips(nextProject), nextProject);
+  return nextProject;
+}
+
+/**
+ * Adapts humanoid clips to a creature rig: drops tracks for bones the creature lacks and layers a
+ * wing flap, tail sway and jaw open over each clip, scaled by how energetic the clip is.
+ */
+export function addCreatureTracks(
+  clips: Record<string, AnimationClip>,
+  project: Pick<SpineForgeProject, "bones">,
+): Record<string, AnimationClip> {
+  const have = new Set(project.bones.map((b) => b.name));
+  const out: Record<string, AnimationClip> = {};
+  for (const [id, clip] of Object.entries(clips)) {
+    const calm = /idle|bow|anticipation|tease/i.test(id);
+    const boneTracks: Record<string, TransformKey[]> = {};
+    for (const [bone, keys] of Object.entries(clip.boneTracks)) if (have.has(bone)) boneTracks[bone] = keys;
+
+    const d = clip.duration;
+    // Whole beats per clip keep the loop seamless.
+    const beats = Math.max(1, Math.round(d / (calm ? 2.4 : 0.6)));
+    const wave = (amp: number, phase = 0): TransformKey[] => {
+      const keys: TransformKey[] = [];
+      for (let i = 0; i <= beats * 2; i++) {
+        keys.push({ time: i === beats * 2 ? d : Number(((d * i) / (beats * 2)).toFixed(3)), r: (i + phase) % 2 === 0 ? -amp : amp, curve: i < beats * 2 ? EASE_SINE_IN_OUT : undefined });
+      }
+      return keys;
+    };
+    const flap = calm ? 6 : 22;
+    if (have.has("wing-l")) boneTracks["wing-l"] = wave(flap);
+    if (have.has("wing-r")) boneTracks["wing-r"] = wave(-flap);
+    if (have.has("tail")) boneTracks["tail"] = wave(calm ? 4 : 9, 1);
+    if (have.has("jaw") && !calm) {
+      boneTracks["jaw"] = [
+        { time: 0, r: 0, curve: EASE_SINE_IN_OUT },
+        { time: Number((d * 0.3).toFixed(3)), r: -12, curve: EASE_SINE_IN_OUT },
+        { time: Number((d * 0.6).toFixed(3)), r: 0 },
+        { time: d, r: 0 },
+      ];
+    }
+    out[id] = { ...clip, boneTracks };
+  }
+  return out;
 }
