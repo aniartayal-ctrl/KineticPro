@@ -142,3 +142,37 @@ export function loadProjectFile(id: string, root = projectsRoot()): SpineForgePr
   if (errors.length > 0) throw new ProjectFileError(`"${id}" is not a valid project: ${errors[0]}`, 422);
   return project;
 }
+
+export type BackupSummary = { name: string; savedAt: string; bytes: number };
+
+/** Lists backup snapshots for a project (newest first). */
+export function listProjectBackups(id: string, root = projectsRoot()): BackupSummary[] {
+  const dir = path.join(projectDir(assertSafeProjectId(id), root), "backups");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".project.json"))
+    .map((name) => {
+      const st = statSync(path.join(dir, name));
+      return { name, savedAt: st.mtime.toISOString(), bytes: st.size };
+    })
+    .sort((a, b) => b.savedAt.localeCompare(a.savedAt));
+}
+
+/** Loads a specific backup file by name (basename only). */
+export function loadProjectBackup(id: string, backupName: string, root = projectsRoot()): SpineForgeProject {
+  const safeId = assertSafeProjectId(id);
+  if (!backupName.endsWith(".project.json") || backupName.includes("/") || backupName.includes("..")) {
+    throw new ProjectFileError("Invalid backup name", 400);
+  }
+  const file = path.join(projectDir(safeId, root), "backups", backupName);
+  if (!existsSync(file)) throw new ProjectFileError(`No backup "${backupName}"`, 404);
+  try {
+    const project = JSON.parse(readFileSync(file, "utf8")) as SpineForgeProject;
+    const errors = validateProject(project);
+    if (errors.length > 0) throw new ProjectFileError(`Backup is not valid: ${errors[0]}`, 422);
+    return project;
+  } catch (err) {
+    if (err instanceof ProjectFileError) throw err;
+    throw new ProjectFileError("Could not read backup", 422);
+  }
+}

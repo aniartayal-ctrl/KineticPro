@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { BUILTIN_PRESETS } from "@/core/presets";
+import type { BackupSummary, ProjectSummary } from "@/server/projects";
+import { usePreferencesStore } from "@/store/usePreferencesStore";
 import type { DocumentRequest } from "@/store/useStudioStore";
-import type { ProjectSummary } from "@/server/projects";
+import type { SpineForgeProject } from "@/core/schema";
 
 export type OpenTarget = DocumentRequest;
 
@@ -45,16 +47,30 @@ const Check = () => (
 );
 
 /** Popover under the document title: saved projects first, then built-in presets. */
-export function ProjectsMenu({ currentId, onOpen }: { currentId: string; onOpen: (target: OpenTarget) => Promise<string | null> }) {
+export function ProjectsMenu({
+  currentId,
+  onOpen,
+  onRestoreBackup,
+}: {
+  currentId: string;
+  onOpen: (target: OpenTarget) => Promise<string | null>;
+  onRestoreBackup?: (project: SpineForgeProject) => Promise<string | null>;
+}) {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [backups, setBackups] = useState<BackupSummary[] | null>(null);
+  const recent = usePreferencesStore((s) => s.recentProjects);
 
   useEffect(() => {
     fetchSavedProjects()
       .then(setProjects)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not list projects"));
-  }, []);
+    fetch(`/api/projects/${encodeURIComponent(currentId)}?backups=1`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { backups?: BackupSummary[] } | null) => setBackups(d?.backups ?? []))
+      .catch(() => setBackups([]));
+  }, [currentId]);
 
   const open = async (target: OpenTarget) => {
     setBusy(`${target.kind}:${target.id}`);
@@ -64,11 +80,54 @@ export function ProjectsMenu({ currentId, onOpen }: { currentId: string; onOpen:
     if (err) setError(err);
   };
 
+  const restore = async (name: string) => {
+    if (!onRestoreBackup) return;
+    setBusy(`backup:${name}`);
+    setError(null);
+    try {
+      const res = await fetch(`/api/projects/${encodeURIComponent(currentId)}?backup=${encodeURIComponent(name)}`);
+      const data = (await res.json().catch(() => ({}))) as { project?: SpineForgeProject; error?: string };
+      if (!res.ok || !data.project) throw new Error(data.error ?? "Could not load backup");
+      const err = await onRestoreBackup(data.project);
+      if (err) setError(err);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not restore backup");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const row = "w-full text-left rounded-[8px] px-2 py-1.5 group hover:bg-[var(--accent)] hover:text-white disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-inherit transition-colors";
   const sub = "text-[11px] text-[var(--label-3)] group-hover:text-white/75";
 
   return (
     <div role="menu" aria-label="Projects" className="absolute top-[calc(100%+6px)] left-1/2 -translate-x-1/2 w-[340px] material-thick rounded-[12px] p-1.5 animate-panel-in text-left">
+      {recent.length > 0 && (
+        <>
+          <div className="px-2 pt-1 pb-1 text-[11px] font-semibold text-[var(--label-3)]">Recent</div>
+          {recent.map((r) => (
+            <button
+              key={r.id}
+              role="menuitem"
+              disabled={busy !== null}
+              onClick={() =>
+                void open(
+                  projects?.some((p) => p.id === r.id)
+                    ? { kind: "saved", id: r.id, title: r.title }
+                    : BUILTIN_PROJECTS.find((t) => t.id === r.id) ?? { kind: "saved", id: r.id, title: r.title },
+                )
+              }
+              className={row}
+            >
+              <div className="flex items-center gap-2">
+                <span className="w-4 shrink-0" />
+                <span className="flex-1 truncate text-[13px]">{r.title}</span>
+              </div>
+            </button>
+          ))}
+          <div className="h-px bg-[var(--separator)] my-1 mx-2" />
+        </>
+      )}
       <div className="px-2 pt-1 pb-1 text-[11px] font-semibold text-[var(--label-3)]">Saved</div>
       {projects === null && !error && <div className="px-2 py-2 text-[12px] text-[var(--label-3)]">Loading…</div>}
       {projects?.length === 0 && (
@@ -105,6 +164,29 @@ export function ProjectsMenu({ currentId, onOpen }: { currentId: string; onOpen:
         <p role="alert" className="mx-2 mt-1 text-[12px] leading-snug text-[#ff453a]">
           {error}
         </p>
+      )}
+      {backups && backups.length > 0 && onRestoreBackup && (
+        <>
+          <div className="h-px bg-[var(--separator)] my-1 mx-2" />
+          <div className="px-2 pt-1 pb-1 text-[11px] font-semibold text-[var(--label-3)]">Versions</div>
+          <div className="max-h-28 overflow-y-auto">
+            {backups.slice(0, 8).map((b) => (
+              <button
+                key={b.name}
+                role="menuitem"
+                disabled={busy !== null}
+                onClick={() => void restore(b.name)}
+                className={row}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="w-4 shrink-0" />
+                  <span className="flex-1 truncate text-[12px]">{formatSavedAt(b.savedAt)}</span>
+                  <span className={`${sub} tabular-nums`}>{busy === `backup:${b.name}` ? "…" : `${Math.round(b.bytes / 1024)} KB`}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
       )}
       <div className="h-px bg-[var(--separator)] my-1 mx-2" />
       <p className="px-2 pb-1 text-[11px] text-[var(--label-3)]">Saved in the projects folder · ⌘S save · ⌘O open</p>
