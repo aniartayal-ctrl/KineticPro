@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolveInside } from "../server/safe-paths";
 import path from "node:path";
 import JSZip from "jszip";
-import sharp from "sharp";
+import sharp, { type OverlayOptions } from "sharp";
 import { SpineForgeAnimator } from "../core/animator";
 import type { PartMeshData, SpineForgeProject } from "../core/schema";
 import { deformMeshVerticesCPU } from "../core/solver";
@@ -202,7 +202,7 @@ export async function buildCompleteUnityExportBundle(
   const atlasPageName = `${project.id}.png`;
   const atlasLayout = computeAtlasLayout(atlasPageName, atlasInputs, 4);
 
-  const composites: sharp.OverlayOptions[] = [];
+  const composites: OverlayOptions[] = [];
   for (const item of atlasInputs) {
     const reg = atlasLayout.regions[item.name];
     if (reg && item.buffer) {

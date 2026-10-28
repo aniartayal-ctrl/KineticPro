@@ -2,12 +2,12 @@
 #   python3 -m venv vision/.venv && vision/.venv/bin/pip install -r vision/requirements.txt
 # The app uses vision/.venv automatically when it exists (or set KINETIC_PYTHON).
 numpy>=1.24
-opencv-python-headless>=4.8
-Pillow>=10.0
+opencv-python-headless>=4.8.1.78
+Pillow>=11.3
 psd-tools>=1.9
 # Optional: pose landmarks without passing config.pose
 # mediapipe>=0.10
 # Optional HTTP worker (vision/server.py)
-# fastapi>=0.110
+# fastapi>=0.115
 # uvicorn>=0.27
-# python-multipart>=0.0.9
+# python-multipart>=0.0.18
