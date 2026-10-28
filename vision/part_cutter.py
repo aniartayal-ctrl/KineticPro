@@ -41,6 +41,8 @@ def _safe_layer_name(name: str) -> str:
 
 # "FILL 03 > wing_L" or "FILL 09 > head (forehead)": hidden backfill painted under the named part.
 _FILL_LAYER = re.compile(r"^\s*fill\b[^>]*>\s*([^\s(]+)", re.IGNORECASE)
+# Hidden layers that are artist guides, not alternate art.
+_GUIDE_LAYER = re.compile(r"\b(ref|reference|guide|sketch|hide)\b", re.IGNORECASE)
 
 
 def _layer_pixels(layer: Any) -> tuple[Image.Image, int, int] | None:
@@ -86,7 +88,8 @@ def extract_psd_layers(psd_path: Path, out_dir: Path) -> dict[str, Any]:
     """Extract visible layers from a .psd file into trimmed PNG parts.
 
     Hidden "FILL nn > part" layers are artist backfill: each is merged underneath the part it names,
-    so the hole behind an occluding part is already painted when that part moves.
+    so the hole behind an occluding part is already painted when that part moves. Other hidden layers
+    (closed eyelids, a shut mouth) come in as parts marked `hidden`, for clips to switch on.
     """
     try:
         from psd_tools import PSDImage
@@ -105,7 +108,10 @@ def extract_psd_layers(psd_path: Path, out_dir: Path) -> dict[str, Any]:
             fills.setdefault(_safe_layer_name(match.group(1)), []).append(layer)
 
     for idx, layer in enumerate(psd):
-        if not layer.is_visible() or layer.is_group():
+        if layer.is_group():
+            continue
+        hidden = not layer.is_visible()
+        if hidden and (_FILL_LAYER.match(layer.name) or _GUIDE_LAYER.search(layer.name)):
             continue
         pixels = _layer_pixels(layer)
         if pixels is None:
@@ -139,6 +145,8 @@ def extract_psd_layers(psd_path: Path, out_dir: Path) -> dict[str, Any]:
         }
         if fill_pixels:
             meta["filled"] = len(fill_pixels)
+        if hidden:
+            meta["hidden"] = True
         parts_meta.append(meta)
 
     composite_name = None

@@ -16,6 +16,7 @@ import type {
   DeformKey,
   FxKey,
   IkMixKey,
+  RigPart,
   SpineForgeProject,
   TransformKey,
 } from "./schema";
@@ -194,12 +195,28 @@ export function sampleIkTrack(
   };
 }
 
+/** Whether `part` is shown at time `t`: the last visibility key at or before `t`, else its setup flag. */
+export function isPartVisible(part: Pick<RigPart, "name" | "hidden">, clip: Pick<AnimationClip, "visibilityTracks"> | undefined, t: number): boolean {
+  let visible = !part.hidden;
+  let at = -Infinity;
+  for (const key of clip?.visibilityTracks?.[part.name] ?? []) {
+    if (key.time <= t + 1e-6 && key.time >= at) {
+      at = key.time;
+      visible = key.visible;
+    }
+  }
+  return visible;
+}
+
 export type EvaluatedFrame = {
   time: number;
   poses: BonePose[];
   world: Affine2D[];
   skin: Float32Array;
+  /** Parts to draw this frame, back to front (hidden parts left out). */
   order: string[];
+  /** Every part in draw order, shown or not: what Spine slot offsets are measured against. */
+  slotOrder: string[];
   deforms: Record<string, number[] | undefined>;
   fx: { flash: number; shake: number; keyPose: number };
 };
@@ -282,7 +299,9 @@ export class SpineForgeAnimator {
         if (t >= dk.time) explicitOrder = dk.order;
       }
     }
-    const order = evaluateDrawOrder(this.skeleton, effectivePoses, explicitOrder);
+    const slotOrder = evaluateDrawOrder(this.skeleton, effectivePoses, explicitOrder);
+    const hiddenParts = new Set(project.parts.filter((p) => !isPartVisible(p, clip, t)).map((p) => p.name));
+    const order = hiddenParts.size > 0 ? slotOrder.filter((name) => !hiddenParts.has(name)) : slotOrder;
 
     const deforms: Record<string, number[] | undefined> = {};
     for (const part of project.parts) {
@@ -298,6 +317,7 @@ export class SpineForgeAnimator {
       world: this.world,
       skin: this.skin,
       order,
+      slotOrder,
       deforms,
       fx,
     };

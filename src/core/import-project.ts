@@ -5,7 +5,7 @@
 
 import type { SpineForgeProject } from "./schema";
 
-export type CutPart = { name: string; src: string; x: number; y: number; w: number; h: number; pixelWidth?: number; pixelHeight?: number };
+export type CutPart = { name: string; src: string; x: number; y: number; w: number; h: number; pixelWidth?: number; pixelHeight?: number; hidden?: boolean };
 export type CutResult = { projectId: string; heroSrc: string; width: number; height: number; parts: CutPart[] };
 
 const HEAVY_WEAPON = /hammer|axe|mace|club|maul|anvil/i;
@@ -29,7 +29,7 @@ export function projectFromCut(cut: CutResult, fileName: string): SpineForgeProj
     palette: { rim: "#ffd27a", flash: "#ffffff" },
     bones: [{ name: "root", x: 0.5, y: 0.97, length: 0.06 }],
     ikConstraints: [],
-    parts: cut.parts.map((p) => ({ name: p.name, src: p.src, x: p.x, y: p.y, w: p.w, h: p.h })),
+    parts: cut.parts.map((p) => ({ name: p.name, src: p.src, x: p.x, y: p.y, w: p.w, h: p.h, ...(p.hidden ? { hidden: true } : {}) })),
     animations: {},
   };
 }

@@ -115,6 +115,8 @@ export type RigPart = {
   tint?: string;
   /** Blend mode for rendering in WebGL2 / Unity / Spine. */
   blendMode?: "normal" | "additive" | "multiply" | "screen";
+  /** Alternate layer (closed eyelid, shut mouth) that is off until a visibility key shows it. */
+  hidden?: boolean;
 };
 
 export type CurveType = "linear" | "stepped" | [number, number, number, number];
@@ -152,6 +154,12 @@ export type DrawOrderKey = {
   time: number;
   /** Explicit back-to-front part order at this keyframe. */
   order: string[];
+};
+
+export type VisibilityKey = {
+  time: number;
+  /** Stepped: the part stays shown or hidden until the next key. */
+  visible: boolean;
 };
 
 export type FxKey = {
@@ -206,6 +214,8 @@ export type AnimationClip = {
   deformTracks?: Record<string, DeformKey[]>;
   /** Optional explicit draw-order timeline keys. */
   drawOrderTrack?: DrawOrderKey[];
+  /** Optional per-part show/hide keys (blinks, mouth shapes). Parts without keys keep their `hidden` flag. */
+  visibilityTracks?: Record<string, VisibilityKey[]>;
   /** Optional shader flash / shake / keyPose swap track. */
   fxTrack?: FxKey[];
   /** Optional Unity AnimationEvent & Spine Event triggers along the timeline. */
@@ -330,6 +340,13 @@ export function validateProject(project: SpineForgeProject): string[] {
       }
       if (!partNames.has(part.swap.before)) {
         errors.push(`Part "${part.name}" swap references unknown part "${part.swap.before}"`);
+      }
+    }
+  }
+  for (const [clipName, clip] of Object.entries(project.animations ?? {})) {
+    for (const partName of Object.keys(clip.visibilityTracks ?? {})) {
+      if (!partNames.has(partName)) {
+        errors.push(`Clip "${clipName}" shows or hides unknown part "${partName}"`);
       }
     }
   }

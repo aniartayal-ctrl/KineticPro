@@ -16,6 +16,7 @@ import {
   type RigPart,
   type SpineForgeProject,
   type TransformKey,
+  type VisibilityKey,
 } from "./schema";
 import { buildPartMesh } from "./weights";
 
@@ -337,7 +338,9 @@ function autoRigCreature(
   options: { meshDensity?: "low" | "medium" | "high"; weightMode?: "hybrid" | "heat" | "capsule" },
 ): SpineForgeProject {
   const parts = project.parts;
-  const find = (re: RegExp, side?: "l" | "r") => parts.find((p) => re.test(p.name) && (side === undefined || partSide(p.name) === side));
+  // Hidden alternates (closed eyelids, a shut mouth) never anchor bones; they ride on the head.
+  const find = (re: RegExp, side?: "l" | "r") =>
+    parts.find((p) => !p.hidden && re.test(p.name) && (side === undefined || partSide(p.name) === side));
   const body = find(/body|torso|chest/) ?? parts.reduce((a, b) => (b.w * b.h > a.w * a.h ? b : a));
   const head = find(/head|face/);
 
@@ -410,7 +413,7 @@ function autoRigCreature(
 
   const density = options.meshDensity ?? "high";
   const updatedParts: RigPart[] = parts.map((part) => {
-    const bound = part === body ? { skin: ["hips", "chest"] } : (binding.get(part) ?? { bone: /eye|horn|brow|lid/i.test(part.name) ? headBone : "chest" });
+    const bound = part === body ? { skin: ["hips", "chest"] } : (binding.get(part) ?? { bone: part.hidden || /eye|horn|brow|lid/i.test(part.name) ? headBone : "chest" });
     return { ...part, meshDensity: density, mesh: undefined, bone: bound.bone, skin: bound.skin };
   });
 
@@ -428,9 +431,12 @@ function autoRigCreature(
  */
 export function addCreatureTracks(
   clips: Record<string, AnimationClip>,
-  project: Pick<SpineForgeProject, "bones">,
+  project: Pick<SpineForgeProject, "bones" | "parts">,
 ): Record<string, AnimationClip> {
   const have = new Set(project.bones.map((b) => b.name));
+  const lids = project.parts.filter((p) => p.hidden && /lid|blink/i.test(p.name));
+  const shutMouth = project.parts.find((p) => p.hidden && /mouth|jaw/i.test(p.name));
+  const openMouth = shutMouth && project.parts.find((p) => !p.hidden && /mouth|jaw/i.test(p.name));
   const out: Record<string, AnimationClip> = {};
   for (const [id, clip] of Object.entries(clips)) {
     const calm = /idle|bow|anticipation|tease/i.test(id);
@@ -459,7 +465,29 @@ export function addCreatureTracks(
         { time: d, r: 0 },
       ];
     }
-    out[id] = { ...clip, boneTracks };
+    const visibilityTracks: Record<string, VisibilityKey[]> = { ...clip.visibilityTracks };
+    const t3 = (v: number) => Number(v.toFixed(3));
+    // A blink is 0.14 s of closed lids; calm clips blink twice.
+    const blinks = (calm ? [0.42, 0.9] : [0.5]).map((f) => t3(d * f)).filter((t) => t + 0.14 <= d);
+    for (const lid of lids) {
+      visibilityTracks[lid.name] = blinks.flatMap((t) => [
+        { time: t, visible: true },
+        { time: t3(t + 0.14), visible: false },
+      ]);
+    }
+    // Calm clips rest with the mouth shut for a stretch; energetic ones keep it open for the jaw.
+    if (shutMouth && openMouth && calm) {
+      const [from, to] = [t3(d * 0.25), t3(d * 0.6)];
+      visibilityTracks[shutMouth.name] = [
+        { time: from, visible: true },
+        { time: to, visible: false },
+      ];
+      visibilityTracks[openMouth.name] = [
+        { time: from, visible: false },
+        { time: to, visible: true },
+      ];
+    }
+    out[id] = { ...clip, boneTracks, ...(Object.keys(visibilityTracks).length ? { visibilityTracks } : {}) };
   }
   return out;
 }

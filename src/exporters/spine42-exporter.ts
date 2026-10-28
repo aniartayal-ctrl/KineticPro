@@ -35,7 +35,8 @@ export type Spine42BoneJson = {
 export type Spine42SlotJson = {
   name: string;
   bone: string;
-  attachment: string;
+  /** Omitted for alternate layers that start hidden. */
+  attachment?: string;
   blend?: "normal" | "additive" | "multiply" | "screen";
 };
 
@@ -120,6 +121,7 @@ export type Spine42Json = {
     {
       bones?: Record<string, { rotate?: ValueKey[]; translate?: XYKey[]; scale?: XYKey[] }>;
       ik?: Record<string, { time: number; mix: number; bendPositive: boolean; curve?: SpineCurveJson }[]>;
+      slots?: Record<string, { attachment: { time: number; name: string | null }[] }>;
       deform?: Record<string, Record<string, Record<string, { time: number; vertices: number[]; curve?: SpineCurveJson }[]>>>;
       drawOrder?: { time: number; offsets?: { slot: string; offset: number }[] }[];
       events?: { time: number; name: string; int?: number; float?: number; string?: string }[];
@@ -285,7 +287,7 @@ export function exportSpine42(project: SpineForgeProject, options: Spine42Export
   const spineSlots: Spine42SlotJson[] = project.parts.map((part) => ({
     name: part.name,
     bone: part.bone ?? part.skin?.[0] ?? rootBone.name,
-    attachment: part.name,
+    ...(part.hidden ? {} : { attachment: part.name }),
     ...(part.blendMode && part.blendMode !== "normal" ? { blend: part.blendMode } : {}),
   }));
 
@@ -465,11 +467,11 @@ export function exportSpine42(project: SpineForgeProject, options: Spine42Export
     for (let s = 0; s <= totalSteps; s++) {
       const t = round4((s / totalSteps) * clip.duration);
       const frame = animEvaluator.evaluateAt(t, clip.duration / totalSteps);
-      const sig = frame.order.join(",");
+      const sig = frame.slotOrder.join(",");
       if (sig === lastOrderSig) continue;
       lastOrderSig = sig;
       const offsets: { slot: string; offset: number }[] = [];
-      frame.order.forEach((slotName, newIdx) => {
+      frame.slotOrder.forEach((slotName, newIdx) => {
         const origIdx = baseOrder.indexOf(slotName);
         if (origIdx >= 0 && newIdx !== origIdx) offsets.push({ slot: slotName, offset: newIdx - origIdx });
       });
@@ -508,8 +510,21 @@ export function exportSpine42(project: SpineForgeProject, options: Spine42Export
       if (Object.keys(slots).length > 0) deformJson = { default: slots };
     }
 
+    // Show/hide keys become attachment timelines: the slot's own attachment, or none.
+    let slotsJson: Spine42Json["animations"][string]["slots"];
+    for (const [partName, keys] of Object.entries(rawClip.visibilityTracks ?? {})) {
+      if (!keys?.length || !attachments[partName]) continue;
+      slotsJson ??= {};
+      slotsJson[partName] = {
+        attachment: [...keys]
+          .sort((a, b) => a.time - b.time)
+          .map((k) => ({ time: round4(k.time), name: k.visible ? partName : null })),
+      };
+    }
+
     animationsJson[clipName] = {
       bones: bonesAnim,
+      ...(slotsJson ? { slots: slotsJson } : {}),
       ...(ikJson ? { ik: ikJson } : {}),
       ...(deformJson ? { deform: deformJson } : {}),
       ...(drawOrderTimeline.length > 1 ? { drawOrder: drawOrderTimeline } : {}),
