@@ -210,15 +210,9 @@ describe("copilot executor", () => {
     assert.equal((await run1("remove_animation_event", {})).ok, false);
   });
 
-  it("drives the slot presentation", async () => {
-    const stage = await run1("slot_stage", { mode: "big win", orientation: "portrait" });
-    assert.equal(stage.ok, true, stage.message);
-    assert.equal(state().slotStageMode, "big_win_ladder");
-    assert.equal(state().slotOrientation, "portrait_9_16");
-    assert.match(stage.message, /Now playing clip/);
+  it("drives VFX and lip-sync", async () => {
     assert.equal((await run1("set_vfx", { vfx: "fire" })).message, "VFX: fire aura");
     assert.equal(state().activeVfx, "fire_aura");
-    assert.equal((await run1("slot_stage", { mode: "off" })).message, "Slot stage off");
     assert.equal((await run1("lip_sync", { phrase: "jackpot call" })).ok, true);
     assert.equal((await run1("set_vfx", { vfx: "glitter cannon" })).ok, false);
   });

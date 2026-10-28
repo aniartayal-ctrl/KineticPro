@@ -146,11 +146,6 @@ const SCENARIOS: Scenario[] = [
     check: () => expect(!(clip().events ?? []).some((e) => e.name === "CameraShake"), "camera shake still there"),
   },
   {
-    name: "big win stage",
-    prompt: "Preview the big win ladder in portrait",
-    check: () => expect(s().slotStageMode === "big_win_ladder" && s().slotOrientation === "portrait_9_16", `${s().slotStageMode} ${s().slotOrientation}`),
-  },
-  {
     name: "symbol rig",
     prompt: "Open the wild symbol so I can animate it",
     check: () => expect(/wild/.test(s().project.id), `project ${s().project.id}`),

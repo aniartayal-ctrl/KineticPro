@@ -106,14 +106,10 @@ export const SCRIPTS = {
     () => "Removed the stray key and event.",
   ],
   "mock: present": [
-    () => [
-      ["slot_stage", { mode: "big_win_ladder", orientation: "portrait_9_16" }],
-      ["set_vfx", { vfx: "coin_fountain" }],
-    ],
+    () => [["set_vfx", { vfx: "coin_fountain" }]],
     () => [["lip_sync", { phrase: "jackpot_call" }]],
-    () => [["slot_stage", { mode: "off" }]],
     () => [["set_principles", { anticipation: 1.4, exaggeration: 1.2 }]],
-    () => "Previewed the big win and pushed anticipation.",
+    () => "Set coin VFX, lip-sync, and pushed anticipation.",
   ],
   "mock: correct": [
     () => [["select", { bone: "tentacle" }]],

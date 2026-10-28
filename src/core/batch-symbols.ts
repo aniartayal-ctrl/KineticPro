@@ -1,6 +1,5 @@
 /**
- * Batch 8-Symbol Pack Auto-Rigger & In-Viewport 5×3 Slot Reel / Big-Win Context Stage
- * (`src/core/batch-symbols-and-slot-stage.ts`)
+ * Batch 8-Symbol Pack Auto-Rigger (`src/core/batch-symbols.ts`)
  */
 
 import { synthesizeAllFamousGameClips } from "./physics-and-principles";
@@ -146,49 +145,4 @@ export function buildSymbolRigProject(themeId: string, desc: SlotSymbolDescripto
 export function generateBatch8SymbolPack(themeId: string): SpineForgeProject[] {
   const descriptors = getThemeSymbols(themeId);
   return descriptors.map((desc) => buildSymbolRigProject(themeId, desc));
-}
-
-export type SlotStageContext = {
-  bezelSrc: string;
-  coinSrc: string;
-  winBanners: {
-    nice: string;
-    mega: string;
-    superb: string;
-    sensational: string;
-  };
-  symbols: SlotSymbolDescriptor[];
-  /** 5 columns × 3 rows of symbol roles for the in-viewport 5×3 reel preview. */
-  reelGrid: SlotSymbolRole[][];
-  /** Winning payline coordinates [[col, row], ...]. */
-  winningPayline: [number, number][];
-};
-
-export function getSlotStageContext(themeId: string): SlotStageContext {
-  const baseDir = themeId.includes("solara") ? "/presets/sands-of-solara" : "/presets/astral-forge";
-  return {
-    bezelSrc: `${baseDir}/bezel.webp`,
-    coinSrc: `${baseDir}/coin.webp`,
-    winBanners: {
-      nice: `${baseDir}/win-nice.webp`,
-      mega: `${baseDir}/win-mega.webp`,
-      superb: `${baseDir}/win-superb.webp`,
-      sensational: `${baseDir}/win-sensational.webp`,
-    },
-    symbols: getThemeSymbols(themeId),
-    reelGrid: [
-      ["l2", "h1", "l1"],
-      ["h3", "wild", "l3"],
-      ["scatter", "h1", "h2"],
-      ["l1", "wild", "l2"],
-      ["h2", "h1", "scatter"],
-    ],
-    winningPayline: [
-      [0, 1],
-      [1, 1],
-      [2, 1],
-      [3, 1],
-      [4, 1],
-    ],
-  };
 }

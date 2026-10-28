@@ -32,7 +32,6 @@ const OVERLAYS: [RegExp, string][] = [
   [/\btrails?\b/, "trail"],
   [/\blighting\b|relight|normal.?map/, "lighting"],
   [/\bhit ?box(es)?\b|colliders?\b/, "hitboxes"],
-  [/\breels?\b|slot stage\b|\bstage\b/, "reels"],
   [/\bsolo\b|isolate/, "solo"],
 ];
 
@@ -181,15 +180,6 @@ function budgetTarget(c: string): string {
   return "mobile-hero";
 }
 
-const STAGE_WORDS: [RegExp, string][] = [
-  [/\bbig ?win|\bladder\b/, "big_win_ladder"],
-  [/\bbonus wheel|\bwheel of fortune|\bwheel\b/, "bonus_wheel"],
-  [/\bhold (and|&|n) spin|\bcoin respin/, "hold_and_spin_coins"],
-  [/\bscatter anticipation|\breel fire\b/, "scatter_anticipation"],
-  [/\bfeature splash|\bsplash\b/, "feature_splash"],
-  [/\bexpanding wild|\bwild reel\b/, "expanding_wild_reel"],
-  [/\btumble|\bcascade\b/, "reel_tumble_cascade"],
-];
 const VFX_WORDS: [RegExp, string][] = [
   [/\blightning|\bbolts?\b/, "lightning_bolts"],
   [/\bfire|\bflames?\b/, "fire_aura"],
@@ -277,13 +267,6 @@ function planClause(c: string, ctx: CopilotContext, memo: { bones: string[] } = 
     }
   }
 
-  // Slot presentation.
-  const stage = STAGE_WORDS.find(([re]) => re.test(c))?.[1];
-  if (stage && /\b(show|preview|play|stage|run|demo|present|try)\b/.test(c)) {
-    const orientation = /\b(portrait|vertical|9.?16|phone)\b/.test(c) ? "portrait_9_16" : /\b(landscape|horizontal|16.?9)\b/.test(c) ? "landscape_16_9" : undefined;
-    return [act("slot_stage", { mode: stage, ...(orientation ? { orientation } : {}) }, `Stage: ${stage.replace(/_/g, " ")}`)];
-  }
-  if (/\b(stage|reels?) off\b|\b(hide|close|stop|exit) (the )?(slot )?stage\b/.test(c)) return [act("slot_stage", { mode: "off" }, "Stage off")];
   if (/\b(vfx|effects?|particles?|aura)\b/.test(c) && !/\bevent\b/.test(c)) {
     const vfx = VFX_WORDS.find(([re]) => re.test(c))?.[1];
     if (vfx) return [act("set_vfx", { vfx }, `VFX ${vfx.replace(/_/g, " ")}`)];

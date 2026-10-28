@@ -45,12 +45,11 @@ export function UserManualModal({
     setMode,
     runOneClickAutoRig,
     runAutoModeSelectAction,
-    setSlotStageMode,
     requestDocument,
     setActiveVfx,
   } = useStudioNoTime();
 
-  const [activeTab, setActiveTab] = useState<"quickstart" | "tools" | "slot_suite" | "unity">("quickstart");
+  const [activeTab, setActiveTab] = useState<"quickstart" | "tools" | "symbols" | "unity">("quickstart");
 
   if (!isOpen) return null;
 
@@ -81,7 +80,7 @@ export function UserManualModal({
             [
               { id: "quickstart", label: "1. 30-Second Quick Start (Try Live)" },
               { id: "tools", label: "2. Shortcuts" },
-              { id: "slot_suite", label: "3. Slot Game Animation Suite" },
+              { id: "symbols", label: "3. Batch 8-Symbol Auto-Rigger" },
               { id: "unity", label: "4. Unity C# & Spine 4.2 Integration" },
             ] as const
           ).map((t) => (
@@ -146,19 +145,19 @@ export function UserManualModal({
 
                 <div className="p-4 rounded-2xl liquid-glass-well space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-[var(--label)]">Step 3 · Test in 5×3 Slot Stage</span>
+                    <span className="text-xs font-semibold text-[var(--label)]">Step 3 · Rig a Slot Symbol</span>
                     <button
                       onClick={() => {
-                        setSlotStageMode("reel_tumble_cascade");
+                        requestDocument({ kind: "symbol", id: "wild", title: "Wild symbol" });
                         onClose();
                       }}
                       className="btn-primary px-3 py-1 text-[11px]"
                     >
-                      Try 5×3 Tumble Stage
+                      Try WILD Symbol
                     </button>
                   </div>
                   <p className="text-[11px] text-slate-300">
-                    Preview your hero alongside a live 5×3 Tumble / Cascade Reel Grid, 500× Multiplier Orb Projectile Beam, 4-Tier Big Win Odometer, 1×3 Expanding Wild, or 8-Wedge Bonus Wheel.
+                    Open any of the theme&apos;s 8 slot symbols (H1–H3, L1–L3, Wild, Scatter) as its own auto-rigged project with win / expand / scatter clips.
                   </p>
                 </div>
 
@@ -176,7 +175,7 @@ export function UserManualModal({
                     </button>
                   </div>
                   <p className="text-[11px] text-slate-300">
-                    Exports your Zero-Dependency Unity C# Rig (.sfrig.json + .slotanim.json), Spine 4.2 (.json + .atlas.txt), and Baked Flipbook Sprite Sheet (.sprites.json) in one ZIP.
+                    Exports your Zero-Dependency Unity C# Rig (.sfrig.json), Spine 4.2 (.json + .atlas.txt), and Baked Flipbook Sprite Sheet (.sprites.json) in one ZIP.
                   </p>
                 </div>
               </div>
@@ -185,22 +184,21 @@ export function UserManualModal({
 
           {activeTab === "tools" && <ShortcutsSheet />}
 
-          {activeTab === "slot_suite" && (
+          {activeTab === "symbols" && (
             <div className="space-y-3.5">
               <p className="text-slate-300">
-                Click any button below to launch that Slot Game Animation Suite choreography mode directly on the stage:
+                Open any of the theme&apos;s 8 slot symbols as its own auto-rigged document:
               </p>
               <div className="grid grid-cols-3 gap-2.5">
                 {[
-                  { label: "Tumble & 500× Orb Beam", action: () => setSlotStageMode("reel_tumble_cascade") },
-                  { label: "4-Tier Big Win Odometer", action: () => setSlotStageMode("big_win_ladder") },
-                  { label: "🃏 1×3 Expanding Wild Reel", action: () => setSlotStageMode("expanding_wild_reel") },
-                  { label: "Bonus Wheel of Fortune", action: () => setSlotStageMode("bonus_wheel") },
-                  { label: "2-Scatter Reel Fire", action: () => setSlotStageMode("scatter_anticipation") },
-                  { label: "Hold & Spin Coins", action: () => setSlotStageMode("hold_and_spin_coins") },
-                  { label: "Feature Splash Banner", action: () => setSlotStageMode("feature_splash") },
                   { label: "Rig WILD Symbol", action: () => requestDocument({ kind: "symbol", id: "wild", title: "Wild symbol" }) },
                   { label: "Rig SCATTER Symbol", action: () => requestDocument({ kind: "symbol", id: "scatter", title: "Scatter symbol" }) },
+                  { label: "Rig H1 Symbol", action: () => requestDocument({ kind: "symbol", id: "h1", title: "H1 symbol" }) },
+                  { label: "Rig H2 Symbol", action: () => requestDocument({ kind: "symbol", id: "h2", title: "H2 symbol" }) },
+                  { label: "Rig H3 Symbol", action: () => requestDocument({ kind: "symbol", id: "h3", title: "H3 symbol" }) },
+                  { label: "Rig L1 Symbol", action: () => requestDocument({ kind: "symbol", id: "l1", title: "L1 symbol" }) },
+                  { label: "Rig L2 Symbol", action: () => requestDocument({ kind: "symbol", id: "l2", title: "L2 symbol" }) },
+                  { label: "Rig L3 Symbol", action: () => requestDocument({ kind: "symbol", id: "l3", title: "L3 symbol" }) },
                 ].map((btn, idx) => (
                   <button
                     key={idx}

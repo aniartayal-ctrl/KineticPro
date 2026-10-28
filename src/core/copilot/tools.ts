@@ -42,16 +42,6 @@ const frame = int("Frame number at the clip's frame rate. Use either time or fra
 
 export const EVENT_NAMES = ["OnHit", "SpawnVFX", "PlaySFX", "CameraShake"];
 export const ARCHETYPES = ["auto_detect", "heavy_titan", "olympus_caster", "agile_duelist", "slot_symbol", "treasure_chest"];
-export const STAGE_MODES = [
-  "off",
-  "reel_tumble_cascade",
-  "big_win_ladder",
-  "scatter_anticipation",
-  "feature_splash",
-  "hold_and_spin_coins",
-  "expanding_wild_reel",
-  "bonus_wheel",
-];
 export const VFX = ["none", "lightning_bolts", "fire_aura", "shockwave_rings", "coin_fountain", "star_sparks"];
 export const LIP_SYNC_PHRASES = ["battle_cry", "olympus_roar", "jackpot_call"];
 export const SYMBOL_ROLES = ["h1", "h2", "h3", "l1", "l2", "l3", "wild", "scatter"];
@@ -88,7 +78,7 @@ export const COPILOT_TOOLS: ToolSpec[] = [
     description: "Show or hide a viewport overlay.",
     input: obj(
       {
-        overlay: str("Overlay", ["bones", "mesh", "heatmap", "onion", "arcs", "trail", "lighting", "hitboxes", "reels", "solo"]),
+        overlay: str("Overlay", ["bones", "mesh", "heatmap", "onion", "arcs", "trail", "lighting", "hitboxes", "solo"]),
         on: bool("true shows, false hides; omit to toggle"),
       },
       ["overlay"],
@@ -244,12 +234,6 @@ export const COPILOT_TOOLS: ToolSpec[] = [
       exaggeration: num("0.5..2", 0.5, 2),
     }),
   },
-  // Slot presentation
-  {
-    name: "slot_stage",
-    description: "Preview the character on a slot stage: reels, big-win ladder, scatter anticipation, feature splash, hold and spin, expanding wild, bonus wheel, or off.",
-    input: obj({ mode: str("Stage", STAGE_MODES), orientation: str("Screen", ["landscape_16_9", "portrait_9_16"]) }, ["mode"]),
-  },
   { name: "set_vfx", description: "Choose the elemental VFX layer shown with the character.", input: obj({ vfx: str("Effect", VFX) }, ["vfx"]) },
   {
     name: "lip_sync",
@@ -313,7 +297,6 @@ export type CopilotContext = {
   activeSkin?: string;
   springBones?: string[];
   hiddenParts?: string[];
-  stage?: string;
   suggestions?: { id: string; principle: string; title: string; fixable: boolean }[];
 };
 
@@ -339,7 +322,6 @@ export function describeContext(ctx: CopilotContext): string {
     `Bones with physics: ${ctx.springBones?.join(", ") || "none"}`,
     `Selected: bone ${ctx.selectedBone ?? "none"}, layer ${ctx.selectedPart ?? "none"}; tool ${ctx.mode ?? "?"}${ctx.mode === "animate" && ctx.transformTool ? `/${ctx.transformTool}` : ""}`,
   ];
-  if (ctx.stage && ctx.stage !== "off") lines.push(`Slot stage: ${ctx.stage}`);
   if (ctx.skins?.length) lines.push(`Skins: ${ctx.skins.map((k) => (k === ctx.activeSkin ? `${k} (active)` : k)).join(", ")}`);
   if (ctx.suggestions?.length) {
     lines.push("Coach suggestions for this clip:");

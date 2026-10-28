@@ -177,7 +177,6 @@ test("layers, cleanup, presentation and generator phrasings", () => {
   assert.deepEqual(args("hide the bones")[0], ["toggle_overlay", { overlay: "bones", on: false }]);
   assert.deepEqual(args("delete the key at frame 12 on the head")[0], ["delete_key", { bones: ["head"], frame: 12 }]);
   assert.deepEqual(args("remove the camera shake event")[0], ["remove_animation_event", { name: "CameraShake" }]);
-  assert.deepEqual(args("preview the big win ladder in portrait")[0], ["slot_stage", { mode: "big_win_ladder", orientation: "portrait_9_16" }]);
   assert.deepEqual(args("turn the vfx to fire")[0], ["set_vfx", { vfx: "fire_aura" }]);
   assert.deepEqual(args("lip sync the jackpot call")[0], ["lip_sync", { phrase: "jackpot_call" }]);
   assert.deepEqual(args("open the wild symbol")[0], ["open_symbol_rig", { role: "wild" }]);
@@ -193,7 +192,7 @@ test("every catalog tool is reachable from plain English", () => {
     "mesh the body dense", "reset the warp on the body", "bring the head to the front", "hide the hammer layer", "rotate the head 10 degrees",
     "breakdown 50%", "delete the key at frame 4 on the head", "copy the pose", "paste the pose at frame 9", "ease all keys", "make it 20% faster",
     "regenerate all clips", "bake", "add an onhit event at frame 4", "remove the onhit event", "more anticipation in all clips",
-    "preview the bonus wheel", "turn the vfx to coins", "lip sync the battle cry", "open the wild symbol", "review this clip",
+    "turn the vfx to coins", "lip sync the battle cry", "open the wild symbol", "review this clip",
     "add anticipation", "fix everything", "switch to the awakened skin", "check the budget", "undo", "redo", "save", "open project sands", "export",
   ];
   const reached = new Set(phrases.flatMap((p) => planCommand(p, { ...ctx, skins: ["default", "awakened"] }).actions.map((a) => a.tool)));

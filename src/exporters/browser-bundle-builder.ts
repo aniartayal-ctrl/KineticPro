@@ -8,7 +8,6 @@
 
 import JSZip from "jszip";
 import type { SpineForgeProject } from "@/core/schema";
-import { buildUnitySlotSuiteManifest } from "@/core/slot-animation-suite";
 import { computeAtlasLayout, type AtlasInputRegion } from "./atlas-packer";
 import { exportSpine42Json } from "./spine42-exporter";
 import { buildSpriteSheetManifest } from "./spritesheet-exporter";
@@ -64,7 +63,7 @@ export async function buildBrowserUnityExportBundle(
   }
   const atlasDataUrl = atlasCanvas.toDataURL("image/png");
 
-  // 2. Build Spine 4.2 JSON, Unity .sfrig.json & Slot Suite .slotanim.json
+  // 2. Build Spine 4.2 JSON & Unity .sfrig.json
   const spineJson = JSON.stringify(exportSpine42Json(project, { physics: "native", sampleRateHz: 24 }), null, 2);
   const spineAtlasTxt = atlasLayout.spineAtlasText;
   const unitySfRigJson = JSON.stringify(
@@ -72,7 +71,6 @@ export async function buildBrowserUnityExportBundle(
     null,
     2,
   );
-  const slotSuiteManifestJson = JSON.stringify(buildUnitySlotSuiteManifest(project), null, 2);
 
   // 3. Build Flipbook Sprite Sheet Manifest & Canvas
   const sheetManifest = buildSpriteSheetManifest(project, {
@@ -109,7 +107,6 @@ export async function buildBrowserUnityExportBundle(
 
   const unityFolder = zip.folder("unity-spineforge-runtime")!;
   unityFolder.file(`${project.id}.sfrig.json`, unitySfRigJson);
-  unityFolder.file(`${project.id}.slotanim.json`, slotSuiteManifestJson);
   unityFolder.file(`${project.id}.png`, atlasBytes);
 
   const sheetFolder = zip.folder("unity-spritesheet")!;

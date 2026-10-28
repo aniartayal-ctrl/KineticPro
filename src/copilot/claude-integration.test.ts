@@ -64,10 +64,8 @@ describe("Claude integration (mock Messages API)", () => {
   it("changed the studio the way the tools said", () => {
     const s = useStudioStore.getState();
     assert.equal(s.selectedBone, "head");
-    // set_skin_variant chose awakened; the big-win stage later switched to its top-tier skin.
-    assert.equal(s.activeSkinName, "ascended");
-    assert.equal(s.slotStageMode, "off");
-    assert.ok(mock.report().results.some((r) => r.tool === "slot_stage" && /Now playing clip \S+, skin ascended/.test(r.content)));
+    assert.equal(s.activeSkinName, "awakened");
+    assert.ok(mock.report().results.some((r) => r.tool === "set_vfx" && /coin fountain/i.test(r.content)));
   });
 
   it("remembers earlier prompts", async () => {

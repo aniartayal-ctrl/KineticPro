@@ -11,10 +11,9 @@ import { EASE_BACK_OUT, EASE_POWER2_IN, EASE_POWER2_OUT, EASE_SINE_IN_OUT, sampl
 import { BUDGET_TARGETS, computeBudget, type BudgetTarget } from "@/core/budget";
 import { applyAllCues, reviewClip } from "@/core/coach";
 import { findNames } from "@/core/copilot/planner";
-import { getThemeSymbols, type SlotSymbolRole } from "@/core/batch-symbols-and-slot-stage";
-import { ARCHETYPES, LIP_SYNC_PHRASES, STAGE_MODES, SYMBOL_ROLES, VFX, type CopilotAction, type CopilotContext } from "@/core/copilot/tools";
+import { getThemeSymbols, type SlotSymbolRole } from "@/core/batch-symbols";
+import { ARCHETYPES, LIP_SYNC_PHRASES, SYMBOL_ROLES, VFX, type CopilotAction, type CopilotContext } from "@/core/copilot/tools";
 import type { AnimationPrinciplesConfig, AutoArchetypeId } from "@/core/physics-and-principles";
-import type { SlotOrientationMode, SlotSuiteStageMode } from "@/core/slot-animation-suite";
 import type { ElementalVfxType } from "@/core/vfx-colliders-profiler";
 import { keyPreservingShape, patchKeyAt, snapTime, type Channel } from "@/core/keyframes";
 import type { CurveType } from "@/core/schema";
@@ -41,7 +40,6 @@ const OVERLAY_KEYS = {
   trail: "showSlashTrail",
   lighting: "enable3DRelight",
   hitboxes: "showHitboxes",
-  reels: "showSlotStage",
   solo: "isolatePart",
 } as const;
 
@@ -58,8 +56,6 @@ const OVERLAY_ALIASES: Record<string, keyof typeof OVERLAY_KEYS> = {
   normal_map_lighting: "lighting",
   relight: "lighting",
   colliders: "hitboxes",
-  slot_reels: "reels",
-  stage: "reels",
   isolate: "solo",
 };
 
@@ -126,22 +122,6 @@ function pickEnum(input: unknown, values: string[], kind: string, synonyms: Reco
   return hit ?? fail(`Unknown ${kind} "${raw}". Choose: ${values.join(", ")}`);
 }
 
-const STAGE_SYNONYMS: Record<string, string> = {
-  big_win: "big_win_ladder",
-  bigwin: "big_win_ladder",
-  ladder: "big_win_ladder",
-  tumble: "reel_tumble_cascade",
-  cascade: "reel_tumble_cascade",
-  reel: "reel_tumble_cascade",
-  scatter: "scatter_anticipation",
-  splash: "feature_splash",
-  hold: "hold_and_spin_coins",
-  coin: "hold_and_spin_coins",
-  wild: "expanding_wild_reel",
-  wheel: "bonus_wheel",
-  none: "off",
-  hide: "off",
-};
 const VFX_SYNONYMS: Record<string, string> = {
   lightning: "lightning_bolts",
   bolt: "lightning_bolts",
@@ -194,7 +174,6 @@ export function copilotContext(): CopilotContext {
     skins: ["default", ...(s.project.skins ?? []).map((k) => k.name).filter((n) => n !== "default")],
     activeSkin: s.activeSkinName,
     hiddenParts: s.hiddenParts,
-    stage: s.slotStageMode,
     springBones: s.project.bones.filter((b) => b.spring).map((b) => b.name),
     suggestions: reviewClip(s.project, s.activeClip).map((c) => ({ id: c.id, principle: c.principle, title: c.title, fixable: Boolean(c.apply) })),
   };
@@ -422,15 +401,6 @@ async function runOne(action: CopilotAction, host: ExecutorHost): Promise<string
       s.updatePrinciples(patch);
       const p = useStudioStore.getState().principles;
       return `Regenerated the game clips with ${keys.map((k) => `${k} ${p[k].toFixed(2)}`).join(", ")}`;
-    }
-    case "slot_stage": {
-      const mode = pickEnum(a.mode, STAGE_MODES, "stage", STAGE_SYNONYMS) as SlotSuiteStageMode;
-      s.setSlotStageMode(mode);
-      if (a.orientation !== undefined) s.setSlotOrientation(pickEnum(a.orientation, ["landscape_16_9", "portrait_9_16"], "orientation", { portrait: "portrait_9_16", landscape: "landscape_16_9", vertical: "portrait_9_16" }) as SlotOrientationMode);
-      if (mode === "off") return "Slot stage off";
-      // Stage presets also switch clip, skin and VFX; say so, since later edits now target that clip.
-      const st = useStudioStore.getState();
-      return `Slot stage: ${mode.replace(/_/g, " ")} (${st.slotOrientation.replace(/_/g, " ")}). Now playing clip ${st.activeClip}, skin ${st.activeSkinName}, VFX ${st.activeVfx.replace(/_/g, " ")}`;
     }
     case "set_vfx": {
       const vfx = pickEnum(a.vfx, VFX, "effect", VFX_SYNONYMS) as ElementalVfxType;

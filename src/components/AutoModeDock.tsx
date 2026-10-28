@@ -1,13 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { getThemeSymbols } from "@/core/batch-symbols-and-slot-stage";
+import { getThemeSymbols } from "@/core/batch-symbols";
 import { VOICE_PHRASE_PRESETS } from "@/core/parallax-and-lipsync";
 import {
   FAMOUS_GAME_ACTIONS,
   type AutoArchetypeId,
 } from "@/core/physics-and-principles";
-import { playProceduralSlotSound } from "@/core/slot-animation-suite";
 import {
   profileProjectForUnityMobile,
   type ElementalVfxType,
@@ -48,8 +47,6 @@ export function AutoModeDock({
     parallax,
     activeVfx,
     mobileProfileScale,
-    slotStageMode,
-    slotOrientation,
     requestDocument,
     runOneClickAutoRig,
     runAutoModeSelectAction,
@@ -58,8 +55,6 @@ export function AutoModeDock({
     applyVoiceLipSync,
     setActiveVfx,
     setMobileProfileScale,
-    setSlotStageMode,
-    setSlotOrientation,
   } = useStudioNoTime();
 
   const [isShaded, setIsShaded] = useState(false);
@@ -227,73 +222,7 @@ export function AutoModeDock({
           </div>
         </div>
 
-        {/* 4. Slot Game Stage Choreographer (Tumble/Cascade, Big Win Odometer, 2-Scatter Fire, Hold & Spin) */}
-        <div className="p-3 rounded-2xl liquid-glass-well space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="section-title">
-              Slot Stage Choreographer
-            </span>
-            <button
-              onClick={() =>
-                setSlotOrientation(
-                  slotOrientation === "landscape_16_9" ? "portrait_9_16" : "landscape_16_9",
-                )
-              }
-              className="text-[9.5px] px-2 py-0.5 rounded-full bg-white/10 text-sky-200 tabular-nums"
-            >
-              {slotOrientation === "landscape_16_9" ? "16:9 Desktop" : "9:16 Mobile"}
-            </button>
-          </div>
-          <div className="grid grid-cols-2 gap-1.5">
-            {(
-              [
-                { id: "reel_tumble_cascade", label: "Tumble & 500× Orb" },
-                { id: "big_win_ladder", label: "4-Tier Big Win" },
-                { id: "expanding_wild_reel", label: "🃏 1×3 Expanding Wild" },
-                { id: "bonus_wheel", label: "Bonus Wheel Spin" },
-                { id: "scatter_anticipation", label: "2-Scatter Fire" },
-                { id: "hold_and_spin_coins", label: "Hold & Spin" },
-                { id: "feature_splash", label: "Feature Splash" },
-                { id: "off", label: "Hide Stage" },
-              ] as const
-            ).map((st) => (
-              <button
-                key={st.id}
-                onClick={() => setSlotStageMode(st.id)}
-                className={`py-1.5 px-2 rounded-xl text-[10px] font-semibold truncate transition ${
-                  slotStageMode === st.id
-                    ? "liquid-glass-active font-semibold"
-                    : "bg-white/6 text-slate-300 hover:bg-white/12"
-                }`}
-              >
-                {st.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Procedural WebAudio Sound FX Synthesizer */}
-          <div className="pt-1 flex items-center justify-between gap-1">
-            <span className="text-[9.5px] text-slate-400 font-semibold">WebAudio Synth:</span>
-            {(
-              [
-                { id: "tick", label: "Tick" },
-                { id: "slam", label: "Slam" },
-                { id: "scatter_riser", label: "Riser" },
-                { id: "jackpot_fanfare", label: "Fanfare" },
-              ] as const
-            ).map((snd) => (
-              <button
-                key={snd.id}
-                onClick={() => playProceduralSlotSound(snd.id)}
-                className="px-1.5 py-0.5 rounded-full bg-white/8 hover:bg-white/16 text-[9px] text-amber-200 tabular-nums"
-              >
-                {snd.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* 5. Batch 8-Symbol Pack Auto-Rigger (Switch between Hero & All 8 Slot Symbols) */}
+        {/* 4. Batch 8-Symbol Pack Auto-Rigger (Switch between Hero & All 8 Slot Symbols) */}
         <div className="p-3 rounded-2xl liquid-glass-well space-y-2">
           <div className="flex items-center justify-between">
             <span className="section-title">

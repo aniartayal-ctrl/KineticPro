@@ -18,7 +18,6 @@ import JSZip from "jszip";
 import sharp from "sharp";
 import { SpineForgeAnimator } from "../core/animator";
 import type { PartMeshData, SpineForgeProject } from "../core/schema";
-import { buildUnitySlotSuiteManifest } from "../core/slot-animation-suite";
 import { deformMeshVerticesCPU } from "../core/solver";
 import { buildPartMesh } from "../core/weights";
 import { computeAtlasLayout, type AtlasInputRegion } from "./atlas-packer";
@@ -325,7 +324,6 @@ export async function buildCompleteUnityExportBundle(
   }
 
   const spriteSheetJson = JSON.stringify(sheetManifest, null, 2);
-  const slotSuiteManifestJson = JSON.stringify(buildUnitySlotSuiteManifest(project), null, 2);
 
   // 4. Write to disk if outDir is provided
   if (options.outDir) {
@@ -336,7 +334,6 @@ export async function buildCompleteUnityExportBundle(
     writeFileSync(path.join(options.outDir, `${project.id}.sfrig.json`), unitySfRigJson);
     writeFileSync(path.join(options.outDir, `${project.id}-sheet.png`), spriteSheetPng);
     writeFileSync(path.join(options.outDir, `${project.id}.sprites.json`), spriteSheetJson);
-    writeFileSync(path.join(options.outDir, `${project.id}.slotanim.json`), slotSuiteManifestJson);
     writeFileSync(path.join(options.outDir, `${project.id}.project.json`), JSON.stringify(project, null, 2));
   }
 
@@ -349,7 +346,6 @@ export async function buildCompleteUnityExportBundle(
 
   const unityFolder = zip.folder("unity-spineforge-runtime")!;
   unityFolder.file(`${project.id}.sfrig.json`, unitySfRigJson);
-  unityFolder.file(`${project.id}.slotanim.json`, slotSuiteManifestJson);
   unityFolder.file(`${project.id}.png`, atlasPng);
 
   const sheetFolder = zip.folder("unity-spritesheet")!;
