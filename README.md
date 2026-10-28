@@ -2,7 +2,7 @@
 
 # Kinetic Pro — Apple Metal 2D Mesh, Rigging & Slot Game Animation Suite for Unity
 
-**Kinetic Pro** is a **native macOS app** (`Kinetic Pro.app`) — not a website. It is a standalone 2D skeletal, contour Delaunay mesh, weight-painting, and slot game animation studio built with **Apple Metal GPU acceleration**, a SwiftUI pro-app workspace, an **AI Copilot**, and a **3-Way Unity & Spine 4.2 Export Engine**.
+**Kinetic Pro** is a **native macOS app** (`Kinetic Pro.app` only — there is no SpineForge.app). It ships the **Claude studio** (Visual Physics Learner, HEAVY TITAN, Batch 8-Symbol Auto-Rigger, Copilot) inside a native window. Do not open browser demos or any SwiftUI Metal prototype as “Kinetic Pro.”
 
 📖 **[Read the Complete User Manual (`USER_MANUAL.md`)](./USER_MANUAL.md)**
 
@@ -11,10 +11,6 @@
 ![Kinetic Pro — studio with performance budget](./docs/screenshots/studio-budget.webp)
 
 ![Kinetic Pro — bones, copilot and keyframe sheet](./docs/screenshots/studio-rig-timeline.webp)
-
-![Kinetic Pro — 1-Click Auto Studio & Slot Stage Choreographer](./docs/screenshots/slot-suite-tumble.webp)
-
-![Kinetic Pro — 4-Tier Big Win Escalation & Live Odometer](./docs/screenshots/slot-suite-bigwin.webp)
 
 ![Kinetic Pro — Interactive In-App User Manual & 3-Click Guided Tour](./docs/screenshots/user-manual-tour.webp)
 
@@ -30,17 +26,15 @@
    - Live dials for **Volume-Preserving Squash & Stretch** ($s_x \cdot s_y \approx 1.0$), **Anticipation**, **Follow-Through & Overlapping Action**, and **Exaggeration**.
    - **14 Built-in Animations**: `idle`, `anticipation`, `cheer` (15×), `strike` (30×), `power` (45×), `triumph` (60×), `bow`, `zeus-bolt` (Olympus Sky Cast), `berserk-spin` (Whirlwind Cleave), `hit-react`, `symbol-win`, `wild-expand`, `scatter-trigger`, and `chest-open`.
 
-3. **Slot Game Animation Suite (`src/core/slot-animation-suite.ts`)**
-   - **Tumble / Cascade & `500×` Multiplier Orb Beam**: 4-phase column-staggered gravity drop, payline pop, shatter, and multiplier projectile beam into the top plaque.
-   - **4-Tier Big Win Escalation & Live Odometer**: Choreographs `NICE` → `MEGA` → `SUPERB` → `SENSATIONAL` banners with rolling payout counter and coin fountain.
-   - **1×3 Expanding Wild Reel Unfurl**, **Interactive 8-Wedge Bonus Wheel of Fortune** (with clapper pin spring physics), **2-Scatter Reel Fire**, **Hold & Spin Coins**, **Batch 8-Symbol Auto-Rigger**, **Dual 16:9 / 9:16 Safe Zones**, and **WebAudio Procedural Sound FX Synthesizer**.
+3. **Batch 8-Symbol Auto-Rigger (`src/core/batch-symbols.ts`)**
+   - One-click open any of the theme's 8 slot symbols (`H1`–`H3`, `L1`–`L3`, `WILD`, `SCATTER`) as its own auto-rigged, meshed, weighted project with win / expand / scatter clips.
 
 4. **Contour Delaunay Mesher, GPU Weight Painter & Liquify FFD (`W`)**
    - Alpha-silhouette marching contour tracer + Ramer-Douglas-Peucker simplifier + Steiner crease vertices + Delaunay triangulation.
    - **Apple Metal Compute Kernel (`compute_auto_weights`)** & Metal 4-bone Linear Blend Skinning, interactive Weight Brush (`B`), Liquify FFD vertex sculpt (`W`), Onion Skinning, Motion Arcs, Weapon Slash Trails, and 3D Normal-Map Point Relighting.
 
 5. **Triple Unity & Spine 4.2 Export Pipeline + Zero-Dependency Unity C# Runtime (`com.spineforge.runtime`)**
-   - **Zero-Dependency Unity Runtime**: Exports `<id>.sfrig.json` + `<id>.slotanim.json` + `<id>.png` with `SpineForgeAnimator.cs` (`MeshFilter`/`MeshRenderer`, 4-bone LBS, `PolygonCollider2D` hitboxes, multi-skins, and `OnAnimationEvent` triggers)—no Spine license required.
+   - **Zero-Dependency Unity Runtime**: Exports `<id>.sfrig.json` + `<id>.png` with `SpineForgeAnimator.cs` (`MeshFilter`/`MeshRenderer`, 4-bone LBS, `PolygonCollider2D` hitboxes, multi-skins, and `OnAnimationEvent` triggers)—no Spine license required.
    - **Spine 4.2 Standard**: Exports `<id>.spine.json` + `<id>.atlas.txt` + `<id>.png`. By default the export is **native**: authored easing curves are kept, spring bones become Spine 4.2 **physics constraints**, follow bones become **transform constraints**, and IK mix keys become IK timelines, so the file stays editable in Spine. Pass `physics: "bake"` to sample everything into plain keys for pre-4.2 runtimes. Every build is round-tripped through Esoteric's official `spine-core` 4.2 runtime in the test suite.
 
 6. **Performance Budget (Inspector → Budget)**
@@ -60,28 +54,25 @@ open "Launch Kinetic Pro.command"
 open "Kinetic Pro.app"
 ```
 
-No browser, Node, or `localhost` server is required for day-to-day use.
+The app starts its studio server itself. Use **`Kinetic Pro.app`** — never `SpineForge.app` (removed) and never a browser window as the product.
 
-### Rebuild the Mac app (Apple Silicon + Xcode)
+### Rebuild the Mac app (clean)
 
 ```bash
 ./scripts/build-mac.sh
-# → swift build -c release  +  packages Kinetic Pro.app
+# → cleans caches, builds KineticPro shell + Next.js, packages Kinetic Pro.app only
 ```
 
-### Optional: developer web studio & tests
-
-The Next.js studio on port `3460` remains for automated UI tests and cross-platform CI. Artists should use the native app.
+### Developer tests (not the product UI)
 
 ```bash
-npm run dev:web          # http://127.0.0.1:3460 (this machine only)
-npm run verify:all       # unit tests + Unity C# runtime check
+npm run verify:all
 npm run export:cli -- all
 ```
 
 ### Copilot: run the whole studio in plain words
 
-Open with **⌘K**. Every feature is a copilot tool (42, `src/core/copilot/tools.ts`): inspect, selection, tools, overlays, playback, auto-rig (with body archetypes), bones, pivots, IK, physics, bone locks, mesh density and weight solvers, warp reset, draw order, layer visibility, keys (absolute or relative, by frame), key deletion, breakdowns, pose copy/paste, curves, retiming, fps, looping, clip generation and its principle settings, physics baking, Unity events (add and remove), coach review and fixes, skins, slot stage previews, VFX, lip-sync, symbol rigs, budget, undo/redo, save, open project and export. Hands-on only: brush strokes (weight painting, warp), the parallax and light sliders, and video recording.
+Open with **⌘K**. Every feature is a copilot tool (41, `src/core/copilot/tools.ts`): inspect, selection, tools, overlays, playback, auto-rig (with body archetypes), bones, pivots, IK, physics, bone locks, mesh density and weight solvers, warp reset, draw order, layer visibility, keys (absolute or relative, by frame), key deletion, breakdowns, pose copy/paste, curves, retiming, fps, looping, clip generation and its principle settings, physics baking, Unity events (add and remove), coach review and fixes, skins, VFX, lip-sync, symbol rigs, budget, undo/redo, save, open project and export. Hands-on only: brush strokes (weight painting, warp), the parallax and light sliders, and video recording.
 
 **Claude (recommended).** Claude calls the tools natively and sees each result before its next step, so it can inspect values, read the coach's suggestions, recover from a wrong name, and tell you what changed. It remembers the conversation ("now do the same on the cape", "undo that"). **Stop** (or Esc) halts between steps; **New** clears the conversation. Every change is one undo step.
 

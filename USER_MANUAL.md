@@ -16,7 +16,7 @@ If you have a character or slot symbol and want it meshed, rigged, animated with
    - Click any of the **14 Action Cards** (e.g., *Olympus Sky-Bolt Cast*, *Mega Win 30× Slam*, *Payline Symbol Pop*, *Treasure Chest Burst*) to preview it live.
 3. **Step 3 — Click `Export` (or press `⌘E`)**
    - Generates and previews your 3-way production bundle:
-     - **Zero-Dependency Unity C# Runtime** (`<id>.sfrig.json` + `<id>.slotanim.json` + `<id>.png` Atlas)
+     - **Zero-Dependency Unity C# Runtime** (`<id>.sfrig.json` + `<id>.png` Atlas)
      - **Spine 4.2 Compatible Bundle** (`<id>.spine.json` + `<id>.atlas.txt` + `<id>.png`)
      - **Baked Flipbook Sprite Sheet & Transparent `.WebM` Video** (`<id>-sheet.png` + `<id>.sprites.json`)
 
@@ -28,9 +28,9 @@ Kinetic Pro uses an **iOS 26 / macOS 26 Liquid Glass** spatial layout modeled di
 
 | Zone | Location | What It Does |
 | :--- | :--- | :--- |
-| **1. Tool Rail** | Far-Left Vertical Bar | Single-key tools (`A`, `V`, `P`, `M`, `B`, `W`, `K`) + Viewport Overlay Toggles (`Bones`, `Grid`, `Heat`, `Onion`, `Arcs`, `Trail`, `3D Lit`, `Box2D`, `Reels`, `Solo`). |
+| **1. Tool Rail** | Far-Left Vertical Bar | Single-key tools (`A`, `V`, `P`, `M`, `B`, `W`, `K`) + Viewport Overlay Toggles (`Bones`, `Grid`, `Heat`, `Onion`, `Arcs`, `Trail`, `3D Lit`, `Box2D`, `Solo`). |
 | **2. Tool Options Bar** | Top Center Bar | Dynamically changes to show the settings for whichever tool is active (just like Photoshop's top options bar). |
-| **3. 1-Click Auto Studio** | Left Floating Dock (in `A` mode) | Visual Physics Learner, Elemental VFX, 2.5D Parallax, Voice Lip-Sync, Slot Stage Choreographer, Batch 8-Symbol Auto-Rigger, 12 Principles Dials, and 14 Game Actions. |
+| **3. 1-Click Auto Studio** | Left Floating Dock (in `A` mode) | Visual Physics Learner, Elemental VFX, 2.5D Parallax, Voice Lip-Sync, Batch 8-Symbol Auto-Rigger, 12 Principles Dials, and 14 Game Actions. |
 | **4. Properties & Layers** | Right-Center Floating Dock | **Top half**: Transform (`Angle °`, `ΔX`, `ΔY`), Visual Bezier Curve Graph, and 3D Normal Relight. **Bottom half**: Tabbed **Layers** (with Eye `●` visibility & `↑`/`↓` z-order), **Bones**, and **History** (`⌘Z`). |
 | **5. AI Rigging Copilot** | Extreme-Right Floating Dock | Natural-language copilot (**Claude** with native tool use, **ChatGPT**, **Grok**, or the offline **Built-in** planner) that runs real tool calls on your rig, mesh, weights, animation and exporter, sees each result, and remembers the conversation. |
 | **6. Video Timeline & Dope Sheet** | Bottom Floating Dock | Play/Pause (`Space`), Clip selector, Time scrubber with `⚡ OnHit` / `✨ SpawnVFX` Unity event flags, `+ Event` button, `Bake Springs`, and expandable multi-bone diamond **Dope Sheet**. |
@@ -68,20 +68,11 @@ Kinetic uses [Spine's default hotkeys](https://esotericsoftware.com/spine-cheat-
   - **Overlap / Trail**: Controls hierarchical phase delay so the hips/chest lead and extremities (arms, weapon, cape, hair) follow naturally.
   - **Exaggeration**: Scales key pose extremes and overshoot arcs.
 
-### B. Slot Game Animation Suite (`Slot Stage Choreographer`)
-Open **Auto Studio (`A`)** and scroll to **Slot Stage Choreographer** (or click **`Reels`** on the left tool rail) to test your character and symbols inside a live slot machine stage:
-1. **`⚡ Tumble & 500× Orb`**: Simulates a 5×3 cascading grid with staggered gravity drop, landing squash, payline pop, shatter, and a `500×` multiplier orb shooting a lightning beam into the top Total Win plaque.
-2. **`🏆 4-Tier Big Win`**: Runs the Pragmatic-style win escalation ladder (`NICE 15×` → `MEGA 30×` → `SUPERB 45×` → `SENSATIONAL 60×+`) with extruded 3D win titles and a rolling `$` odometer.
-3. **`🃏 1×3 Expanding Wild`**: Unfurls a full-reel 1×3 vertical Expanding Wild across Reel 3 with an animated multiplier counter (`2×` → `100×`).
-4. **`🎡 Bonus Wheel Spin`**: Spins an 8-wedge jackpot wheel (`GRAND 1000×`, `MAJOR 250×`) with spring-deflected clapper pin physics.
-5. **`🔥 2-Scatter Fire` & `🪙 Hold & Spin`**: Ignites Reels 3–5 with cyan anticipation electricity or locks sticky Cash/Jackpot coins into the grid.
-6. **`16:9 Desktop` vs `9:16 Mobile`**: Switches the stage safe-zone layout between landscape and portrait orientations.
-
-### C. Batch 8-Symbol Auto-Rigger
+### B. Batch 8-Symbol Auto-Rigger
 - In **Auto Studio (`A`)**, find the **Batch 8-Symbol Auto-Rigger** grid (`H1`, `H2`, `H3`, `L1`, `L2`, `L3`, `WILD`, `SCATTER`).
 - Click any symbol icon to immediately rig, mesh, weight, and animate that symbol with all 14 clips (`symbol-win`, `wild-expand`, `scatter-trigger`). Click **`Load Hero Rig`** to return to your main character.
 
-### D. 2.5D Parallax Look-At, Voice Lip-Sync & 3D Normal Relighting
+### C. 2.5D Parallax Look-At, Voice Lip-Sync & 3D Normal Relighting
 - **2.5D Turn**: Move your cursor over the character—foreground parts (`head`, `weapon`, `forearm`) shift forward while background parts (`cape`, `hair`, `arm-back`) shift in inverse Z-parallax.
 - **Voice Lip-Sync**: Click any **`🎙`** voice chip (`BY THE ASTRAL FORGE!`, `FEEL THE THUNDER!`, `SENSATIONAL MEGA WIN!`) to keyframe jaw/head/chest syllables automatically.
 - **3D Normal Relight**: In the **Properties** panel, drag the **3D Normal Relight** angle (`-180°` to `+180°`) and intensity sliders to relight 2D painted sprites in real time using GPU Sobel surface normals.
