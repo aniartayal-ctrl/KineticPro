@@ -10,6 +10,7 @@
     "build:mac": "zsh scripts/build-mac.sh",
     "start": "next start --hostname 127.0.0.1 --port 3460",
     "test": "tsx --test src/core/*.test.ts src/core/copilot/*.test.ts src/copilot/*.test.ts src/exporters/*.test.ts src/server/*.test.ts",
+    "test:vision": "vision/.venv/bin/python3 vision/test_amodal_cutter.py",
     "export:cli": "tsx src/cli/export.ts",
     "migrate:slotspy": "tsx src/cli/migrate-slotspy.ts",
     "verify:unity": "tsx src/cli/verify-unity.ts",

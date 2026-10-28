@@ -1,104 +1,41 @@
 #!/usr/bin/env python3
-"""SpineForge Vision Worker: Smart Part Cutter, Joint Cover Ring Synthesizer, PSD Extractor, and Local Inpainter.
+"""SpineForge Vision Worker: B-gated amodal part cutter.
 
-Capabilities:
-1. Extract layered PSD files directly into trimmed cut-out parts + normalized rects + draw order.
-2. Segment a single flat PNG/WebP character into layered parts using:
-   - Interactive SAM (Segment Anything) point/box prompts when SAM checkpoint is available, OR
-   - Fast OpenCV connected-components + watershed + GrabCut + line-split geometry with joint cover rings.
-3. Synthesize circular joint overlap cover rings at limb pivots so rotating joints never expose gaps.
-4. Automatically inpaint occluded torso/body regions behind cut limbs using OpenCV Telea/Navier-Stokes
-   (or optional external AI inpaint image) so limbs can swing freely without leaving holes.
+Pipeline:
+  0. A-pose / clear-limb gate (optional refuse)
+  1. Pose landmarks → capsules + joint covers
+  2. Modal masks + ball-joint amodal caps + outline interrupt
+  3. Joint-ring + torso Telea inpaint
+  4. Trimmed PNGs (+ optional Spine 4.2 JSON)
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import math
-import os
 import sys
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 from PIL import Image
 
+# Allow `python vision/part_cutter.py` from repo root
+_VISION_DIR = Path(__file__).resolve().parent
+if str(_VISION_DIR) not in sys.path:
+    sys.path.insert(0, str(_VISION_DIR))
 
-def disk(px: int) -> np.ndarray:
-    px = max(1, int(px))
-    return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (px * 2 + 1, px * 2 + 1))
-
-
-def grow(mask: np.ndarray, px: int) -> np.ndarray:
-    if px <= 0:
-        return mask
-    return cv2.dilate(mask.astype(np.uint8), disk(px)) > 0
-
-
-def erode(mask: np.ndarray, px: int) -> np.ndarray:
-    if px <= 0:
-        return mask
-    return cv2.erode(mask.astype(np.uint8), disk(px)) > 0
-
-
-def soft(mask: np.ndarray, sigma: float = 1.0) -> np.ndarray:
-    if sigma <= 0:
-        return mask.astype(np.float32)
-    return cv2.GaussianBlur(mask.astype(np.float32), (0, 0), sigma)
-
-
-def above_line(shape: tuple[int, int], a: tuple[float, float], b: tuple[float, float]) -> np.ndarray:
-    """True for pixels above the directed line a -> b (normalized [0..1] coords)."""
-    h, w = shape
-    ys, xs = np.mgrid[0:h, 0:w]
-    return (b[0] - a[0]) * w * (ys - a[1] * h) - (b[1] - a[1]) * h * (xs - a[0] * w) < 0
-
-
-def capsule_mask(
-    shape: tuple[int, int],
-    a: tuple[float, float],
-    b: tuple[float, float],
-    radius_norm: float,
-) -> np.ndarray:
-    """True for pixels inside a capsule from a to b with radius (normalized to height)."""
-    h, w = shape
-    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
-    ax, ay = a[0] * w, a[1] * h
-    bx, by = b[0] * w, b[1] * h
-    dx, dy = bx - ax, by - ay
-    length_sq = dx * dx + dy * dy
-    if length_sq < 1e-6:
-        t = np.zeros_like(xs)
-    else:
-        t = np.clip(((xs - ax) * dx + (ys - ay) * dy) / length_sq, 0.0, 1.0)
-    dist = np.hypot(xs - (ax + dx * t), ys - (ay + dy * t))
-    return dist <= (radius_norm * h)
-
-
-def inpaint_occluded_body(
-    rgba: np.ndarray,
-    occluder_mask: np.ndarray,
-    protect_mask: np.ndarray | None = None,
-    dilate_px: int = 6,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Inpaint the body under movable limbs using OpenCV Telea + alpha distance feathering."""
-    rgb = rgba[..., :3].astype(np.uint8)
-    alpha = rgba[..., 3].astype(np.uint8)
-    inpaint_zone = grow(occluder_mask, dilate_px)
-    if protect_mask is not None:
-        inpaint_zone &= ~grow(protect_mask, 2)
-    mask_u8 = (inpaint_zone.astype(np.uint8)) * 255
-    inpainted_rgb = cv2.inpaint(rgb, mask_u8, inpaintRadius=7, flags=cv2.INPAINT_TELEA)
-    body_alpha = alpha.copy()
-    # Keep alpha inside the character silhouette while feathering where occluders were removed
-    inpainted_alpha = cv2.inpaint(body_alpha, mask_u8, inpaintRadius=7, flags=cv2.INPAINT_TELEA)
-    return inpainted_rgb, inpainted_alpha
+from inpaint import inpaint_joint_rings, inpaint_occluded_body, resolve_inpaint_config
+from joints import apply_ball_joint_covers, apply_line_splits, interrupt_internal_outlines
+from mask_ops import capsule_mask, grow, soft
+from pose_gate import PoseNotRiggableError, build_pose_cut_graph, check_clear_limbs, resolve_pose
+from presentation import inpaint_dilate_for_overlap, merge_presentation_into_graph, presentation_extras
+from spine_export import export_spine_bundle
+from taxonomy import resolve_taxonomy
 
 
 def extract_psd_layers(psd_path: Path, out_dir: Path) -> dict[str, Any]:
-    """Extract visible layers from a .psd file into trimmed WebP/PNG parts and return SpineForge part metadata."""
+    """Extract visible layers from a .psd file into trimmed PNG parts."""
     try:
         from psd_tools import PSDImage
     except ImportError as exc:
@@ -142,7 +79,6 @@ def extract_psd_layers(psd_path: Path, out_dir: Path) -> dict[str, Any]:
             }
         )
 
-    # A flattened reference image: browsers cannot show the .psd itself.
     composite_name = None
     flat = psd.composite()
     if flat is not None:
@@ -162,32 +98,71 @@ def cut_flat_character(
     out_dir: Path,
     config: dict[str, Any],
 ) -> dict[str, Any]:
-    """Cut a single character image into Spine-style parts with joint cover rings and occluded body fill.
-
-    Config format supports:
-    - capsules: { partName: [[ax, ay, bx, by, radius], ...] }
-    - splits: [{ "part": "arm-front", "rest": "arm-upper", "pieces": [{"name": "forearm", "side": "below", "line": [[x1,y1],[x2,y2]]}], "cover": {"from": "forearm", "center": [cx, cy], "radius": 0.045} }]
-    - occluders: ["arm-upper", "forearm", "weapon"]
-    - order: ["cape", "body", "head", "arm-upper", "forearm", "weapon"]
-    """
+    """Cut a flat character into Spine-ready parts with ball-joint caps and occlusion fill."""
     out_dir.mkdir(parents=True, exist_ok=True)
     raw = Image.open(image_path).convert("RGBA")
     bbox = raw.getchannel("A").point(lambda a: 255 if a > 8 else 0).getbbox()
     work = raw.crop(bbox) if bbox and config.get("trimSource", False) else raw
     w, h = work.size
     rgba = np.array(work, dtype=np.uint8)
-    rgb = rgba[..., :3].astype(np.float32)
     alpha = rgba[..., 3].astype(np.float32) / 255.0
     silhouette = alpha > 0.03
+
+    tax = resolve_taxonomy(config)
+    taxonomy_name = tax["taxonomy"]
+    inpaint_cfg = resolve_inpaint_config(config)
+    joint_cover_scale = float(config.get("jointCoverScale") or config.get("joint_cover_scale") or 1.1)
+    outline_interrupt = bool(config.get("outlineInterrupt", config.get("outline_interrupt", True)))
+    require_clear = bool(config.get("requireClearLimbs", config.get("require_clear_limbs", False)))
+    max_overlap = float(config.get("maxLimbTorsoOverlap", config.get("max_limb_torso_overlap", 0.08)))
+    emit_spine = bool(config.get("emitSpineJson", config.get("emit_spine_json", False)))
+
+    # --- Stage 0–1: pose + capsules ---
+    # Pose graph when: explicit pose, humanoid-v1 taxonomy, usePose=true, or no capsules given.
+    capsules_cfg: dict[str, list[list[float]]] = dict(config.get("capsules") or {})
+    presentation_mode = taxonomy_name == "presentation"
+    if config.get("usePose") is False:
+        use_pose_graph = False
+    elif config.get("pose") or taxonomy_name in ("humanoid-v1", "presentation") or not capsules_cfg:
+        use_pose_graph = True
+    else:
+        use_pose_graph = bool(config.get("usePose", False))
+
+    pose = None
+    splits: list[dict[str, Any]] = list(config.get("splits") or [])
+    priority: list[str] = list(config.get("priority") or list(capsules_cfg.keys()))
+
+    if use_pose_graph:
+        pose = resolve_pose(config, rgba, silhouette)
+        graph_tax = "humanoid-v1" if presentation_mode else taxonomy_name
+        graph = build_pose_cut_graph(pose, silhouette, graph_tax, joint_cover_scale)
+        if presentation_mode:
+            graph = merge_presentation_into_graph(graph)
+        # Merge: explicit capsules override pose-generated ones for same keys
+        for name, caps in graph["capsules"].items():
+            capsules_cfg.setdefault(name, caps)
+        if not config.get("splits"):
+            splits = graph["splits"]
+        if not config.get("priority"):
+            priority = graph["priority"]
+        pose = graph["pose"]
 
     part_masks: dict[str, np.ndarray] = {}
     taken = np.zeros((h, w), dtype=bool)
 
-    # 1. Extract parts from capsules or polygons
-    capsules_cfg: dict[str, list[list[float]]] = config.get("capsules", {})
-    priority: list[str] = config.get("priority", list(capsules_cfg.keys()))
+    # Presentation: claim prop + draped hair before limb capsules
+    if presentation_mode and pose is not None:
+        for name, mask in presentation_extras(rgba, silhouette, pose).items():
+            claim = mask & ~taken
+            if claim.any():
+                part_masks[name] = claim
+                taken |= claim
+                if name not in priority:
+                    priority.insert(0, name)
 
     for name in priority:
+        if name in part_masks:
+            continue
         mask = np.zeros((h, w), dtype=bool)
         for cap in capsules_cfg.get(name, []):
             ax, ay, bx, by, radius = cap
@@ -197,46 +172,72 @@ def cut_flat_character(
             part_masks[name] = mask
             taken |= mask
 
-    # Remaining silhouette goes to body
     part_masks["body"] = silhouette & ~taken
 
-    # 2. Line splits and circular joint cover rings
-    for split in config.get("splits", []):
-        src_name = split["part"]
-        if src_name not in part_masks:
-            continue
-        remaining = part_masks.pop(src_name).copy()
-        for piece in split.get("pieces", []):
-            p_line = piece["line"]
-            side = above_line((h, w), tuple(p_line[0]), tuple(p_line[1]))
-            cut = remaining & (side if piece.get("side") == "above" else ~side)
-            part_masks[piece["name"]] = cut
-            remaining &= ~cut
-        rest_name = split.get("rest", src_name)
-        part_masks[rest_name] = remaining
-        if "cover" in split:
-            cov = split["cover"]
-            ys, xs = np.mgrid[0:h, 0:w]
-            cx, cy = cov["center"][0] * w, cov["center"][1] * h
-            r_px = cov["radius"] * h
-            ring = ((xs - cx) ** 2 + (ys - cy) ** 2) <= (r_px ** 2)
-            from_part = cov.get("from")
-            if from_part and from_part in part_masks:
-                part_masks[rest_name] |= part_masks[from_part] & ring
+    # Line splits (legacy elbow) then ball-joint covers
+    part_masks = apply_line_splits(part_masks, splits, (h, w))
+    part_masks = apply_ball_joint_covers(part_masks, splits, (h, w), silhouette)
 
-    # 3. Local Telea inpainting of occluded torso behind movable parts
-    occluders = config.get("occluders", [k for k in part_masks if k not in ("body", "head")])
+    # Overlap is measured for adaptive inpaint; hard refuse only if explicitly required
+    warnings: list[str] = []
+    if pose is not None:
+        overlap = check_clear_limbs(
+            part_masks,
+            pose,
+            silhouette,
+            max_overlap=max_overlap,
+            require_clear=require_clear and not presentation_mode,
+        )
+        if overlap > max_overlap:
+            warnings.append(
+                f"limb_torso_overlap={overlap:.3f}: presentation pose — using heavy torso inpaint"
+            )
+    else:
+        overlap = 0.0
+
+    # Outline interrupt on a working RGBA copy
+    work_rgba = rgba
+    if outline_interrupt and splits:
+        work_rgba = interrupt_internal_outlines(rgba, part_masks, splits)
+
+    # Joint-ring local inpaint (extend caps)
+    work_rgba = inpaint_joint_rings(work_rgba, splits, silhouette)
+    rgb = work_rgba[..., :3].astype(np.float32)
+    alpha = work_rgba[..., 3].astype(np.float32) / 255.0
+
+    # Torso occlusion fill
+    occluders = config.get("occluders")
+    if occluders is None:
+        occluders = tax["occluders"]
+    # Drop occluders that were explicitly disabled via inpaintTorso=false
+    if config.get("inpaintTorso") is False:
+        occluders = []
+
     occ_mask = np.zeros((h, w), dtype=bool)
     for occ_name in occluders:
         if occ_name in part_masks:
             occ_mask |= part_masks[occ_name]
 
-    inpaint_rgb, inpaint_a = inpaint_occluded_body(rgba, occ_mask, part_masks.get("head"))
+    protect = part_masks.get("head")
+    if protect is None:
+        protect = np.zeros((h, w), dtype=bool)
+    dilate_px = inpaint_dilate_for_overlap(int(inpaint_cfg["dilatePx"]), float(overlap))
+    if presentation_mode:
+        dilate_px = max(dilate_px, 14)
+    inpaint_rgb, inpaint_a = inpaint_occluded_body(
+        work_rgba,
+        occ_mask,
+        protect,
+        dilate_px=dilate_px,
+    )
 
-    # 4. Export each trimmed part with feathered alpha
-    order = config.get("order") or list(part_masks.keys())
+    order = config.get("order") or tax["order"]
+    # Ensure every extracted part appears even if not in taxonomy order
+    for name in part_masks:
+        if name not in order:
+            order.append(name)
+
     parts_out: list[dict[str, Any]] = []
-
     for name in order:
         mask = part_masks.get(name)
         if mask is None or not mask.any():
@@ -244,11 +245,17 @@ def cut_flat_character(
         if name == "body":
             fill_zone = grow(occ_mask, 4) & silhouette
             part_rgb = np.where(part_masks["body"][..., None], rgb, inpaint_rgb.astype(np.float32))
-            part_alpha = np.maximum(alpha * soft(part_masks["body"], 0.8), (inpaint_a.astype(np.float32) / 255.0) * soft(fill_zone, 1.2))
+            part_alpha = np.maximum(
+                alpha * soft(part_masks["body"], 0.8),
+                (inpaint_a.astype(np.float32) / 255.0) * soft(fill_zone, 1.2),
+            )
         else:
             dilated = grow(mask, 2) & silhouette
+            # For joint covers that extend beyond modal silhouette slightly, allow ring∩mask
+            dilated |= mask
             part_rgb = rgb
             part_alpha = alpha * soft(dilated, 0.9)
+            part_alpha = np.maximum(part_alpha, soft(mask, 0.5) * np.clip(alpha + 0.15, 0, 1))
 
         ys, xs = np.nonzero(part_alpha > 0.02)
         if len(xs) == 0:
@@ -277,11 +284,33 @@ def cut_flat_character(
             }
         )
 
-    return {
+    result: dict[str, Any] = {
         "width": w,
         "height": h,
         "parts": parts_out,
+        "taxonomy": taxonomy_name,
+        "limbTorsoOverlap": round(float(overlap), 4),
+        "inpaintDilatePx": dilate_px,
+        "pose": pose,
+        "warnings": warnings,
     }
+
+    if emit_spine:
+        stem = config.get("spineStem") or image_path.stem or "character"
+        bundle = export_spine_bundle(
+            out_dir,
+            width=w,
+            height=h,
+            parts=parts_out,
+            pose=pose,
+            bone_parents=tax["bone_parents"],
+            part_bone=tax["part_bone"],
+            stem=str(stem),
+        )
+        result["spineJson"] = bundle["spineJson"]
+        result["atlas"] = bundle["atlas"]
+
+    return result
 
 
 def main() -> None:
@@ -296,15 +325,24 @@ def main() -> None:
     cut_p.add_argument("input", type=Path)
     cut_p.add_argument("output_dir", type=Path)
     cut_p.add_argument("--config", type=Path, required=True)
+    cut_p.add_argument("--spine-json", action="store_true", help="Also write Spine 4.2 JSON + atlas")
 
     args = parser.parse_args()
-    if args.cmd == "psd":
-        res = extract_psd_layers(args.input, args.output_dir)
-        print(json.dumps(res, indent=2))
-    elif args.cmd == "cut":
-        cfg = json.loads(args.config.read_text())
-        res = cut_flat_character(args.input, args.output_dir, cfg)
-        print(json.dumps(res, indent=2))
+    try:
+        if args.cmd == "psd":
+            res = extract_psd_layers(args.input, args.output_dir)
+            print(json.dumps(res, indent=2))
+        elif args.cmd == "cut":
+            cfg = json.loads(args.config.read_text())
+            if args.spine_json:
+                cfg["emitSpineJson"] = True
+            res = cut_flat_character(args.input, args.output_dir, cfg)
+            print(json.dumps(res, indent=2))
+    except PoseNotRiggableError as exc:
+        err = {"error": str(exc), "code": exc.code, "overlap": exc.overlap}
+        print(json.dumps(err), file=sys.stderr)
+        print(json.dumps(err))
+        sys.exit(2)
 
 
 if __name__ == "__main__":

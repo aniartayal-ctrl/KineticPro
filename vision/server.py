@@ -10,9 +10,11 @@ from typing import Any
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from part_cutter import cut_flat_character, extract_psd_layers
+from pose_gate import PoseNotRiggableError
 
-app = FastAPI(title="SpineForge Vision Service", version="1.0.0")
+app = FastAPI(title="SpineForge Vision Service", version="1.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,7 +39,13 @@ async def cut_endpoint(
     target_dir.mkdir(parents=True, exist_ok=True)
     src_path = target_dir / (image.filename or "source.png")
     src_path.write_bytes(await image.read())
-    result = cut_flat_character(src_path, target_dir, cfg)
+    try:
+        result = cut_flat_character(src_path, target_dir, cfg)
+    except PoseNotRiggableError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={"error": str(exc), "code": exc.code, "overlap": exc.overlap},
+        )
     result["outputDir"] = str(target_dir)
     return result
 

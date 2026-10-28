@@ -48,13 +48,13 @@ export function autoRigProject(
   };
 
   const headPart = findPart("head", "face", "helmet", "crown");
-  const bodyPart = findPart("body", "torso", "dress", "armor");
-  const armBackPart = findPart("arm-back", "back-arm", "left-arm");
-  const armUpperPart = findPart("arm-upper", "upper-arm", "arm-front", "right-arm");
-  const forearmPart = findPart("forearm", "gauntlet", "hand");
+  const bodyPart = findPart("body", "torso", "dress", "armor", "pelvis");
+  const armBackPart = findPart("arm-upper-r", "arm-back", "back-arm", "right-arm");
+  const armUpperPart = findPart("arm-upper-l", "arm-upper", "upper-arm", "arm-front", "left-arm");
+  const forearmPart = findPart("arm-lower-l", "forearm", "gauntlet", "hand-l", "hand");
   const weaponPart = findPart("hammer", "staff", "weapon", "sword", "axe", "spear");
   const pauldronPart = findPart("pauldron", "shoulder");
-  const hairPart = findPart("hair", "mane", "braid");
+  const hairPart = findPart("hair-bangs", "hair-back", "hair", "mane", "braid");
 
   const headPivot: [number, number] = landmarks?.head ??
     (headPart ? [Number((headPart.x + headPart.w * 0.5).toFixed(4)), Number((headPart.y + headPart.h * 0.82).toFixed(4))] : [0.5, 0.16]);
@@ -247,7 +247,7 @@ export function autoRigProject(
       nextPart = { ...nextPart, bone: undefined, skin: ["head", "hair-left", "hair-right"] };
     } else if (part === headPart || low.includes("head")) {
       nextPart = { ...nextPart, bone: "head", skin: undefined };
-    } else if (part === armBackPart || low.includes("arm-back")) {
+    } else if (part === armBackPart || low.includes("arm-back") || low.includes("arm-upper-r") || low === "arm-lower-r" || low === "hand-r") {
       nextPart = {
         ...nextPart,
         bone: "arm-back",
@@ -256,9 +256,9 @@ export function autoRigProject(
       };
     } else if (part === pauldronPart || low.includes("pauldron")) {
       nextPart = { ...nextPart, bone: "pauldron", skin: undefined };
-    } else if (part === armUpperPart || low.includes("arm-upper")) {
+    } else if (part === armUpperPart || low.includes("arm-upper-l") || low.includes("arm-upper") || low.includes("arm-front")) {
       nextPart = { ...nextPart, bone: "arm", skin: undefined };
-    } else if (part === forearmPart || low.includes("forearm")) {
+    } else if (part === forearmPart || low.includes("arm-lower-l") || low.includes("forearm") || low === "hand-l") {
       nextPart = { ...nextPart, bone: "forearm", skin: undefined };
     } else if (part === weaponPart || low.includes("hammer") || low.includes("staff") || low.includes("weapon")) {
       nextPart = { ...nextPart, bone: "weapon", skin: undefined };

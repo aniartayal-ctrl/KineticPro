@@ -19,14 +19,33 @@ function pythonBin(): string {
 }
 
 /** Turns a failed part-cutter run into a message that says how to fix it. */
-function cutterError(err: unknown): { message: string; status: number } {
+function cutterError(err: unknown): { message: string; status: number; code?: string; overlap?: number } {
   const e = err as { code?: string | number; killed?: boolean; signal?: string; stderr?: string; message?: string };
   const setup = "Run: python3 -m venv vision/.venv && vision/.venv/bin/pip install -r vision/requirements.txt";
   if (e?.code === "ENOENT") return { message: `Python 3 was not found, and the part cutter needs it. Install Python 3, then ${setup.charAt(0).toLowerCase()}${setup.slice(1)}`, status: 501 };
   const missing = /No module named '([^']+)'/.exec(e?.stderr ?? e?.message ?? "")?.[1];
   if (missing) return { message: `The part cutter needs the Python package "${missing}". ${setup}`, status: 501 };
   if (e?.killed || e?.signal === "SIGTERM") return { message: "The part cutter took longer than 5 minutes and was stopped. Try a smaller image.", status: 504 };
-  const lastLine = (e?.stderr ?? "").trim().split("\n").filter(Boolean).pop();
+  const stderr = (e?.stderr ?? "").trim();
+  // CLI prints JSON on stderr (and stdout) for pose_not_riggable; also check stdout via message
+  for (const blob of [stderr, e?.message ?? ""]) {
+    for (const line of blob.split("\n").filter(Boolean).reverse()) {
+      try {
+        const parsed = JSON.parse(line) as { error?: string; code?: string; overlap?: number };
+        if (parsed?.code === "pose_not_riggable") {
+          return {
+            message: parsed.error || "Pose is not riggable",
+            status: 422,
+            code: parsed.code,
+            overlap: parsed.overlap,
+          };
+        }
+      } catch {
+        /* not JSON */
+      }
+    }
+  }
+  const lastLine = stderr.split("\n").filter(Boolean).pop();
   return { message: lastLine || (err instanceof Error ? err.message : "Part cutter failed"), status: 500 };
 }
 
@@ -86,8 +105,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ projectId, heroSrc: assetUrl("source.png"), ...parsed });
     }
   } catch (err) {
-    const { message, status } = cutterError(err);
-    return NextResponse.json({ error: message }, { status });
+    const { message, status, code, overlap } = cutterError(err);
+    return NextResponse.json({ error: message, ...(code ? { code } : {}), ...(overlap != null ? { overlap } : {}) }, { status });
   }
 }
 
