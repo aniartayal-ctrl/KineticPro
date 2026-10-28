@@ -18,7 +18,7 @@ if str(_VISION_DIR) not in sys.path:
 
 from joints import apply_ball_joint_covers
 from mask_ops import capsule_mask, disk_mask
-from part_cutter import cut_flat_character
+from part_cutter import _FILL_LAYER, _backfill_part, cut_flat_character
 from pose_gate import PoseNotRiggableError, build_pose_cut_graph, check_clear_limbs, estimate_a_pose_from_silhouette
 
 
@@ -166,7 +166,25 @@ def test_presentation_monopoly_fixture() -> None:
         )
 
 
+def test_psd_fill_backfill() -> None:
+    """FILL masks are flat red; the part grows under them in its own colours, never red."""
+    part = Image.new("RGBA", (40, 40), (40, 90, 200, 255))
+    fill = Image.new("RGBA", (30, 20), (255, 0, 60, 255))
+    out, left, top = _backfill_part(part, 100, 50, [(fill, 80, 60)])
+    assert (left, top) == (80, 50) and out.size == (60, 40), (left, top, out.size)
+    arr = np.asarray(out)
+    under = arr[10:30, 0:20]
+    assert (under[..., 3] == 255).all(), "fill region must become opaque"
+    assert (under[..., 0] < 120).all() and (under[..., 2] > 150).all(), "fill must take the part's colour"
+    assert (arr[0:10, 0:20, 3] == 0).all(), "outside the fill stays transparent"
+    assert _FILL_LAYER.match("FILL 09 > head (forehead)").group(1) == "head"
+    assert _FILL_LAYER.match("FILL 03 > wing_L").group(1) == "wing_L"
+    assert _FILL_LAYER.match("body") is None
+    print("ok psd_fill_backfill")
+
+
 def main() -> None:
+    test_psd_fill_backfill()
     test_ball_joint_overlap()
     test_pose_gate_rejects_crossed()
     test_cut_a_pose_and_spine()

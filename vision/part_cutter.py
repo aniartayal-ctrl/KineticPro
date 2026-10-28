@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -34,8 +35,59 @@ from spine_export import export_spine_bundle
 from taxonomy import resolve_taxonomy
 
 
+def _safe_layer_name(name: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_" else "-" for c in name.strip().lower()).strip("-")
+
+
+# "FILL 03 > wing_L" or "FILL 09 > head (forehead)": hidden backfill painted under the named part.
+_FILL_LAYER = re.compile(r"^\s*fill\b[^>]*>\s*([^\s(]+)", re.IGNORECASE)
+
+
+def _layer_pixels(layer: Any) -> tuple[Image.Image, int, int] | None:
+    """Layer pixels at their canvas offset, ignoring the layer's visibility flag."""
+    pil_img = layer.topil() if layer.kind == "pixel" else layer.composite(force=True)
+    if pil_img is None:
+        return None
+    return pil_img.convert("RGBA"), layer.left, layer.top
+
+
+def _backfill_part(
+    rgba: Image.Image, left: int, top: int, fill_pixels: list[tuple[Image.Image, int, int]]
+) -> tuple[Image.Image, int, int]:
+    """Grow a part under its FILL masks. The masks only mark where (artists paint them flat red),
+    so the new pixels are inpainted from the part's own colours."""
+    import cv2
+
+    x0 = min([left] + [fl for _, fl, _ in fill_pixels])
+    y0 = min([top] + [ft for _, _, ft in fill_pixels])
+    x1 = max([left + rgba.width] + [fl + f.width for f, fl, _ in fill_pixels])
+    y1 = max([top + rgba.height] + [ft + f.height for f, _, ft in fill_pixels])
+    canvas = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))
+    canvas.alpha_composite(rgba, (left - x0, top - y0))
+    part = np.asarray(canvas).copy()
+    fill_alpha = np.zeros(part.shape[:2], dtype=np.uint8)
+    for f, fl, ft in fill_pixels:
+        a = np.asarray(f)[..., 3]
+        region = fill_alpha[ft - y0 : ft - y0 + f.height, fl - x0 : fl - x0 + f.width]
+        np.maximum(region, a, out=region)
+
+    opaque = part[..., 3] > 8
+    if not (fill_alpha > 8).any() or not opaque.any():
+        return rgba, left, top
+    # Inpaint every non-opaque pixel so transparent black never bleeds into the fill.
+    rgb = cv2.inpaint(part[..., :3], (~opaque).astype(np.uint8) * 255, inpaintRadius=9, flags=cv2.INPAINT_TELEA)
+    out = part.copy()
+    out[..., :3] = np.where(opaque[..., None], part[..., :3], rgb)
+    out[..., 3] = np.maximum(part[..., 3], fill_alpha)
+    return Image.fromarray(out), x0, y0
+
+
 def extract_psd_layers(psd_path: Path, out_dir: Path) -> dict[str, Any]:
-    """Extract visible layers from a .psd file into trimmed PNG parts."""
+    """Extract visible layers from a .psd file into trimmed PNG parts.
+
+    Hidden "FILL nn > part" layers are artist backfill: each is merged underneath the part it names,
+    so the hole behind an occluding part is already painted when that part moves.
+    """
     try:
         from psd_tools import PSDImage
     except ImportError as exc:
@@ -46,38 +98,48 @@ def extract_psd_layers(psd_path: Path, out_dir: Path) -> dict[str, Any]:
     canvas_w, canvas_h = psd.width, psd.height
     parts_meta: list[dict[str, Any]] = []
 
+    fills: dict[str, list[Any]] = {}
+    for layer in psd:
+        match = _FILL_LAYER.match(layer.name)
+        if match and not layer.is_group():
+            fills.setdefault(_safe_layer_name(match.group(1)), []).append(layer)
+
     for idx, layer in enumerate(psd):
         if not layer.is_visible() or layer.is_group():
             continue
-        pil_img = layer.composite()
-        if pil_img is None:
+        pixels = _layer_pixels(layer)
+        if pixels is None:
             continue
-        rgba = pil_img.convert("RGBA")
+        rgba, left, top = pixels
+        safe_name = _safe_layer_name(layer.name) or f"layer-{idx}"
+
+        fill_pixels = [p for p in (_layer_pixels(f) for f in fills.get(safe_name, [])) if p is not None]
+        if fill_pixels:
+            rgba, left, top = _backfill_part(rgba, left, top, fill_pixels)
+
         bbox = rgba.getchannel("A").point(lambda a: 255 if a > 8 else 0).getbbox()
         if not bbox:
             continue
         cropped = rgba.crop(bbox)
-        safe_name = "".join(c if c.isalnum() or c in "-_" else "-" for c in layer.name.strip().lower()).strip("-")
-        if not safe_name:
-            safe_name = f"layer-{idx}"
         part_filename = f"part-{safe_name}.png"
         cropped.save(out_dir / part_filename, "PNG")
-        lx0 = layer.left + bbox[0]
-        ly0 = layer.top + bbox[1]
+        lx0 = left + bbox[0]
+        ly0 = top + bbox[1]
         lw = bbox[2] - bbox[0]
         lh = bbox[3] - bbox[1]
-        parts_meta.append(
-            {
-                "name": safe_name,
-                "src": part_filename,
-                "x": round(lx0 / canvas_w, 5),
-                "y": round(ly0 / canvas_h, 5),
-                "w": round(lw / canvas_w, 5),
-                "h": round(lh / canvas_h, 5),
-                "pixelWidth": lw,
-                "pixelHeight": lh,
-            }
-        )
+        meta: dict[str, Any] = {
+            "name": safe_name,
+            "src": part_filename,
+            "x": round(lx0 / canvas_w, 5),
+            "y": round(ly0 / canvas_h, 5),
+            "w": round(lw / canvas_w, 5),
+            "h": round(lh / canvas_h, 5),
+            "pixelWidth": lw,
+            "pixelHeight": lh,
+        }
+        if fill_pixels:
+            meta["filled"] = len(fill_pixels)
+        parts_meta.append(meta)
 
     composite_name = None
     flat = psd.composite()
