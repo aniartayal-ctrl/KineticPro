@@ -42,11 +42,11 @@
 		</dict>
 	</array>
 	<key>CFBundleExecutable</key>
-	<string>SpineForge</string>
+	<string>KineticPro</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.apple-style.kineticpro.metal</string>
+	<string>com.apple-style.kineticpro.studio</string>
 	<key>CFBundleName</key>
 	<string>Kinetic Pro</string>
 	<key>CFBundlePackageType</key>
@@ -62,11 +62,11 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>Kinetic Pro — Apple Metal 2D Mesh &amp; Rigging Studio</string>
+	<string>Kinetic Pro — Claude Studio (native macOS shell)</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
-	<true/>
+	<false/>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

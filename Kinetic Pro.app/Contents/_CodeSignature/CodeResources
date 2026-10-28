@@ -6,7 +6,11 @@
 	<dict>
 		<key>Resources/AppIcon.icns</key>
 		<data>
-		01QV4ZYMhF4sAU8zunhEyKxtsnM=
+		vH+2E+IWaSxqJJVlqMEdcqHiNAg=
+		</data>
+		<key>Resources/CANONICAL_APP.txt</key>
+		<data>
+		IrmL06x6oAWvHL5MnSIzmJHLoWM=
 		</data>
 		<key>Resources/presets/astral-forge/astral-forge.project.json</key>
 		<data>
@@ -263,16 +267,23 @@
 		<dict>
 			<key>cdhash</key>
 			<data>
-			C9QUHt82lanrCMPvrKcqXvnhh5M=
+			9ylyv/pJh/PWfcfAugqOt2CjaDA=
 			</data>
 			<key>requirement</key>
-			<string>cdhash H"0bd4141edf3695a9eb08c3efaca72a5ef9e18793"</string>
+			<string>cdhash H"f72972bffa4987f3d67dc7c0ba0a8eb760a36830"</string>
 		</dict>
 		<key>Resources/AppIcon.icns</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			QtEjqnFZiR83T0uqVO1xvojPqVul0UZ8vJJER+Z36fI=
+			yCVWrFTrINO7bFPuUSTbS/jfaDvkWPE1IpyGEjz3SUc=
+			</data>
+		</dict>
+		<key>Resources/CANONICAL_APP.txt</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			/O4t026Gf9mI8xB1shQwzSZeZ8JhtSskb9DqDuWuYbc=
 			</data>
 		</dict>
 		<key>Resources/presets/astral-forge/astral-forge.project.json</key>

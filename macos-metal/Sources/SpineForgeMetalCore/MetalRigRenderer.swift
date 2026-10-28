@@ -38,10 +38,10 @@ public final class MetalRigRenderer {
     ]
 
     public init(project: SfProject, publicRootURL: URL) throws {
-        guard let dev = MTLCreateSystemDefaultDevice() else {
+        guard let dev = MetalMaxPerformance.bestDevice() else {
             throw NSError(domain: "SpineForgeMetal", code: 1, userInfo: [NSLocalizedDescriptionKey: "No Apple Metal GPU device found"])
         }
-        guard let queue = dev.makeCommandQueue() else {
+        guard let queue = MetalMaxPerformance.makeMaxCommandQueue(on: dev) else {
             throw NSError(domain: "SpineForgeMetal", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to create Metal command queue"])
         }
         self.device = dev

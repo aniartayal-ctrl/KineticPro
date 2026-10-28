@@ -9,7 +9,10 @@ let package = Package(
     products: [
         .library(name: "SpineForgeMetalCore", targets: ["SpineForgeMetalCore"]),
         .executable(name: "spineforge-metal-cli", targets: ["SpineForgeMetalCLI"]),
-        .executable(name: "SpineForge", targets: ["SpineForgeMacApp"])
+        // CANONICAL product: Claude studio in a native Mac window (WKWebView).
+        // This is the only binary packaged into Kinetic Pro.app.
+        .executable(name: "KineticPro", targets: ["KineticProStudio"])
+        // SpineForgeMacApp (SwiftUI Metal prototype) is NOT a product — do not ship it.
     ],
     targets: [
         .target(
@@ -32,17 +35,14 @@ let package = Package(
             path: "Sources/SpineForgeMetalCLI"
         ),
         .executableTarget(
-            name: "SpineForgeMacApp",
-            dependencies: ["SpineForgeMetalCore"],
-            path: "Sources/SpineForgeMacApp",
+            name: "KineticProStudio",
+            path: "Sources/KineticProStudio",
             linkerSettings: [
-                .linkedFramework("SwiftUI"),
                 .linkedFramework("AppKit"),
-                .linkedFramework("Metal"),
-                .linkedFramework("MetalKit"),
-                .linkedFramework("Vision"),
-                .linkedFramework("CoreImage")
+                .linkedFramework("WebKit")
             ]
         )
+        // Sources/SpineForgeMacApp (SwiftUI Metal prototype) is intentionally
+        // excluded — never package it as Kinetic Pro.app.
     ]
 )

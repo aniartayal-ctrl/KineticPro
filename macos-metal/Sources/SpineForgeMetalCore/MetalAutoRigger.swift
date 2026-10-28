@@ -94,7 +94,7 @@ public enum MetalAutoRigger {
         for part in project.parts {
             renderer.regeneratePartMeshOnMetal(
                 partName: part.name,
-                density: "high",
+                density: "ultra",
                 weightMode: 0,
                 selectedBoneForHeatmap: -1
             )

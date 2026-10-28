@@ -116,14 +116,22 @@ public enum MetalMeshAndClipsGenerator {
         return indices
     }
 
-    /// Generates a contour-aware or subdivided Delaunay `SfPartMesh` for `part` at the requested density ("low", "medium", "high").
+    /// Generates a contour-aware or subdivided Delaunay `SfPartMesh` for `part` at the requested density ("low", "medium", "high", "ultra").
     public static func generatePartMesh(
         part: SfPart,
         projectWidth: Int,
         projectHeight: Int,
         density: String = "medium"
     ) -> SfPartMesh {
-        let baseCols: Float = (density == "low") ? 14.0 : (density == "high") ? 42.0 : 28.0
+        // Ultra pushes tessellation toward the GPU/RAM quota for production-quality deform.
+        let baseCols: Float = {
+            switch density {
+            case "low": return 14.0
+            case "high": return 42.0
+            case "ultra": return 64.0
+            default: return 28.0
+            }
+        }()
         let rigW = Float(projectWidth)
         let rigH = Float(projectHeight)
         let left = part.x * rigW

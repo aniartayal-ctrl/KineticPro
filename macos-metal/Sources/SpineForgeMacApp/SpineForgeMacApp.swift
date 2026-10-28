@@ -144,8 +144,9 @@ public final class MacStudioViewModel: ObservableObject {
     }
     @Published public var isolateSelectedPart: Bool = false
 
-    // Weight Brush & Mesh Controls
-    @Published public var meshDensity: String = "medium"
+    // Weight Brush & Mesh Controls — default high to use more of the Metal working-set quota
+    @Published public var meshDensity: String = "high"
+    @Published public var gpuQuotaLine: String = ""
     @Published public var brushMode: String = "add"
     @Published public var brushRadius: Float = 65.0
     @Published public var brushStrength: Float = 0.45
@@ -212,6 +213,9 @@ public final class MacStudioViewModel: ObservableObject {
             self.renderer = r
             self.gpuDeviceName = r.device.name
             self.gpuUnifiedMemory = r.device.hasUnifiedMemory
+            let quota = MetalMaxPerformance.quota(for: r.device)
+            self.gpuQuotaLine = quota.statusLine
+            self.statusMessage = "Max GPU/RAM · \(quota.statusLine)"
         } catch {
             self.statusMessage = "Metal init warning: \(error.localizedDescription)"
         }
@@ -355,12 +359,12 @@ public final class MacStudioViewModel: ObservableObject {
         var replyParts: [String] = []
 
         if lower.contains("mesh") || lower.contains("delaunay") || lower.contains("weight") || lower.contains("heat") {
-            setPartMeshDensity("high")
+            setPartMeshDensity("ultra")
             dispatchGpuComputeAutoWeights(mode: lower.contains("capsule") ? 0 : 1)
             mode = .weights
-            tools.append("regeneratePartMeshOnMetal(part: '\(selectedPart)', density: 'high')")
+            tools.append("regeneratePartMeshOnMetal(part: '\(selectedPart)', density: 'ultra')")
             tools.append("compute_auto_weights(mode: 'geodesic_heat', gpu: '\(gpuDeviceName)')")
-            replyParts.append("Tessellated '\(selectedPart)' with high-density Delaunay triangles and solved 4-bone weights on \(gpuDeviceName).")
+            replyParts.append("Tessellated '\(selectedPart)' with ultra-density Delaunay triangles and solved 4-bone weights on \(gpuDeviceName).")
         }
         if lower.contains("spring") || lower.contains("wind") || lower.contains("cape") || lower.contains("hair") {
             for i in project.bones.indices {
@@ -394,7 +398,7 @@ public final class MacStudioViewModel: ObservableObject {
         }
 
         if tools.isEmpty {
-            setPartMeshDensity("high")
+            setPartMeshDensity("ultra")
             dispatchGpuComputeAutoWeights(mode: 0)
             regenerateProceduralClipsNatively()
             tools.append("auto_rig_and_weight_pipeline(gpu: '\(gpuDeviceName)')")
@@ -657,7 +661,7 @@ public final class MacStudioViewModel: ObservableObject {
             bone: "hips",
             skin: ["hips", "chest", "head"],
             swap: nil,
-            meshDensity: "medium",
+            meshDensity: "ultra",
             mesh: nil
         )
         let bones: [SfBone] = [
@@ -719,12 +723,18 @@ public final class InteractiveMTKView: MTKView, MTKViewDelegate {
 
     public init(viewModel: MacStudioViewModel) {
         self.viewModel = viewModel
-        super.init(frame: .zero, device: viewModel.renderer?.device ?? MTLCreateSystemDefaultDevice())
+        super.init(frame: .zero, device: viewModel.renderer?.device ?? MetalMaxPerformance.bestDevice())
         self.colorPixelFormat = .bgra8Unorm
         self.clearColor = MTLClearColor(red: 0.016, green: 0.027, blue: 0.067, alpha: 1.0)
-        self.preferredFramesPerSecond = 120
+        // Lock to the display’s maximum refresh (ProMotion 120Hz when available).
+        self.preferredFramesPerSecond = MetalMaxPerformance.maximumFramesPerSecond(for: window?.screen ?? NSScreen.main)
         self.enableSetNeedsDisplay = false
         self.isPaused = false
+        self.autoResizeDrawable = true
+        self.framebufferOnly = true
+        if let p3 = CGColorSpace(name: CGColorSpace.displayP3) {
+            self.colorspace = p3
+        }
         self.delegate = self
 
         let tracking = NSTrackingArea(
@@ -734,6 +744,15 @@ public final class InteractiveMTKView: MTKView, MTKViewDelegate {
             userInfo: nil
         )
         addTrackingArea(tracking)
+    }
+
+    public override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        preferredFramesPerSecond = MetalMaxPerformance.maximumFramesPerSecond(for: window?.screen ?? NSScreen.main)
+        if let scale = window?.backingScaleFactor, scale > 0 {
+            // Full native Retina drawable — no undersampled backing store.
+            layer?.contentsScale = scale
+        }
     }
 
     @available(*, unavailable)
@@ -1213,8 +1232,9 @@ public struct SpineForgeMainStudioView: View {
                                     set: { vm.setPartMeshDensity($0) }
                                 )) {
                                     Text("Low").tag("low")
-                                    Text("Medium").tag("medium")
+                                    Text("Med").tag("medium")
                                     Text("High").tag("high")
+                                    Text("Ultra").tag("ultra")
                                 }
                                 .pickerStyle(.segmented)
                                 .labelsHidden()
@@ -1776,11 +1796,24 @@ struct KineticProMacApplication: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var viewModel: MacStudioViewModel?
+    private var performanceActivity: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Hold interactive + latency-critical QoS so Metal keeps max GPU/RAM headroom.
+        performanceActivity = MetalMaxPerformance.beginProcessBoost()
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
         NSApp.windows.first?.title = "Kinetic Pro"
+        if let device = viewModel?.renderer?.device {
+            let quota = MetalMaxPerformance.quota(for: device)
+            viewModel?.gpuQuotaLine = quota.statusLine
+            viewModel?.statusMessage = "Max GPU/RAM · \(quota.statusLine)"
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        MetalMaxPerformance.endProcessBoost(performanceActivity)
+        performanceActivity = nil
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

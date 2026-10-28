@@ -1,28 +1,22 @@
-# Kinetic Pro — Native macOS (Apple Metal)
+# Kinetic Pro — native macOS shell
 
-This package is the **primary product**: a SwiftUI + Metal studio that ships as `Kinetic Pro.app`.
+**Canonical product:** `KineticPro` → packaged as `../Kinetic Pro.app`
+
+That binary is the **Claude studio** (Visual Physics Learner / HEAVY TITAN) inside a WKWebView shell (`Sources/KineticProStudio`).
 
 | Target | Role |
 | --- | --- |
-| `SpineForgeMacApp` → product `SpineForge` | Native studio UI (`Kinetic Pro.app`) |
-| `SpineForgeMetalCore` | Metal renderer, Vision auto-rig, exporters |
+| `KineticProStudio` → product `KineticPro` | **ONLY** UI shipped as `Kinetic Pro.app` |
+| `SpineForgeMetalCore` | Metal CLI helpers / exporters |
 | `spineforge-metal-cli` | Headless GPU export CLI |
 
-## Build (macOS only)
+`Sources/SpineForgeMacApp` is a discarded SwiftUI Metal prototype. It is **not** a package product and must never be opened as Kinetic Pro.
+
+## Clean build
 
 ```bash
-# From the repo root
 ./scripts/build-mac.sh
+open "../Kinetic Pro.app"
 ```
 
-Requires macOS 14+, Xcode / Swift 5.10+, and Apple Silicon (or a Metal-capable Mac).
-
-## Layout
-
-```
-Sources/SpineForgeMacApp/     SwiftUI workspace, File menu, MTKView
-Sources/SpineForgeMetalCore/  Shaders, solver, Vision, Unity/Spine export
-Sources/SpineForgeMetalCLI/   Command-line exporter
-```
-
-The Next.js app under `src/` is optional (CI / UI tests). Artists run the `.app`, not a browser.
+See `../docs/CANONICAL_APP.md`.

@@ -1,0 +1,3 @@
+CANONICAL Kinetic Pro — Claude studio (WKWebView shell).
+UI markers: Visual Physics Learner, HEAVY TITAN, Batch 8-Symbol Auto-Rigger.
+Do NOT replace this binary with SpineForgeMetalUI / SwiftUI Metal prototype.
