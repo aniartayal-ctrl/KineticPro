@@ -3,10 +3,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { reviewClip, type CueCard } from "@/core/coach";
 import { EXAMPLE_PROMPTS, planCommand } from "@/core/copilot/planner";
+import { samplePose } from "@/core/keyframes";
 import { trimTranscript, type AiProviderId, type ModelStep, type Turn } from "@/core/copilot/providers";
+import type { BonePose } from "@/core/solver";
 import { runAgentTurn, StepError, toolResults } from "@/copilot/agent-loop";
 import { copilotContext, executeCopilotActions, type ActionResult, type ExecutorHost } from "@/copilot/executor";
+import { usePreferencesStore } from "@/store/usePreferencesStore";
 import { useStudioStore } from "@/store/useStudioStore";
+
+type PoseDiff = { bone: string; dx: number; dy: number; dr: number };
 
 type Item = { kind: "text"; text: string } | { kind: "result"; result: ActionResult };
 type Message = { id: string; role: "user" | "assistant"; text?: string; items?: Item[]; note?: string; error?: string };
@@ -26,7 +31,6 @@ const KEY_ENV: Record<string, string> = { claude: "ANTHROPIC_API_KEY", chatgpt: 
 
 /** Turns kept in memory; each request sends at most the provider limit from providers.ts. */
 const KEEP_TURNS = 80;
-const PROVIDER_PREF = "kinetic-pro:copilot-provider";
 const SEVERITY_COLOR = { warn: "#ff9f0a", tip: "#64b0ff" } as const;
 
 const prettyModel = (id?: string) => {
@@ -94,27 +98,85 @@ export function AiAgentPanel({
   const [messages, setMessages] = useState<Message[]>([]);
   const [sent, setSent] = useState<string[]>([]);
   const [recall, setRecall] = useState(-1);
+  const [listening, setListening] = useState(false);
+  const [poseDiff, setPoseDiff] = useState<PoseDiff[] | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   const transcriptRef = useRef<Turn[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const pickedRef = useRef(false);
+  const speechRef = useRef<{ stop: () => void } | null>(null);
+
+  const snapshotPose = (): Record<string, BonePose> | null => {
+    const s = useStudioStore.getState();
+    const clip = s.project.animations[s.activeClip];
+    if (!clip) return null;
+    return samplePose(
+      clip,
+      s.project.bones.map((b) => b.name),
+      s.currentTime,
+    );
+  };
+
+  const diffPoses = (before: Record<string, BonePose> | null, after: Record<string, BonePose> | null): PoseDiff[] => {
+    if (!before || !after) return [];
+    const out: PoseDiff[] = [];
+    for (const name of Object.keys(after)) {
+      const a = after[name]!;
+      const b = before[name];
+      if (!b) continue;
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const dr = a.r - b.r;
+      if (Math.abs(dx) > 1e-4 || Math.abs(dy) > 1e-4 || Math.abs(dr) > 0.05) {
+        out.push({ bone: name, dx, dy, dr });
+      }
+    }
+    return out.slice(0, 12);
+  };
+
+  const toggleVoice = () => {
+    const SR = (window as unknown as { SpeechRecognition?: new () => SpeechRecognition; webkitSpeechRecognition?: new () => SpeechRecognition })
+      .SpeechRecognition
+      ?? (window as unknown as { webkitSpeechRecognition?: new () => SpeechRecognition }).webkitSpeechRecognition;
+    if (!SR) {
+      setMessages((prev) => [
+        ...prev,
+        { id: nextId(), role: "assistant", note: "Voice input isn’t supported in this WebView. Type your prompt instead." },
+      ]);
+      return;
+    }
+    if (listening) {
+      speechRef.current?.stop();
+      setListening(false);
+      return;
+    }
+    const rec = new SR();
+    rec.continuous = false;
+    rec.interimResults = false;
+    rec.onresult = (ev: SpeechRecognitionEvent) => {
+      const text = ev.results[0]?.[0]?.transcript?.trim();
+      if (text) setInput((v) => (v ? `${v} ${text}` : text));
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    speechRef.current = { stop: () => rec.stop() };
+    setListening(true);
+    rec.start();
+  };
 
   const cards = useMemo(() => reviewClip(project, activeClip), [project, activeClip]);
   const fixable = cards.filter((c) => c.apply).length;
   const host: ExecutorHost = { exportBundle: onExport, save: onSave, openBudget: onOpenBudget, openProject: onOpenProject, openSymbol: onOpenSymbol };
 
-  // Which cloud providers have a server key. A saved choice wins; otherwise Claude when it is set up.
+  // Preferences default provider/model; server keys may still prefer Claude when unset.
   useEffect(() => {
     let alive = true;
-    try {
-      const saved = localStorage.getItem(PROVIDER_PREF) as AiProviderId | null;
-      if (saved && PROVIDERS.some((p) => p.id === saved)) {
-        setProvider(saved);
-        pickedRef.current = true;
-      }
-    } catch {
-      /* storage unavailable */
+    const prefs = usePreferencesStore.getState();
+    if (PROVIDERS.some((p) => p.id === prefs.copilotProviderDefault)) {
+      setProvider(prefs.copilotProviderDefault);
+      pickedRef.current = true;
     }
+    if (prefs.copilotModelDefault) setModel(prefs.copilotModelDefault);
     fetch("/api/ai-agent")
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { providers?: ProviderStatus } | null) => {
@@ -139,11 +201,7 @@ export function AiAgentPanel({
     setModel("");
     setLastModel("");
     pickedRef.current = true;
-    try {
-      localStorage.setItem(PROVIDER_PREF, id);
-    } catch {
-      /* storage unavailable */
-    }
+    usePreferencesStore.getState().setCopilotProviderDefault(id);
   };
 
   const record = (...turns: Turn[]) => {
@@ -195,6 +253,7 @@ export function AiAgentPanel({
       await runPlanner(text, replyId, `No ${providerName} key, so the built-in planner ran this. Add one under Key, or set ${KEY_ENV[provider]} in .env.local and restart.`);
       return;
     }
+    if (run.outcome !== "error") usePreferencesStore.getState().recordCopilotSpend();
     const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
     const cost = run.usage ? `${k(run.usage.input)} tokens in (${k(run.usage.cached)} cached), ${k(run.usage.output)} out` : "";
     const note =
@@ -216,6 +275,7 @@ export function AiAgentPanel({
     const text = raw.trim();
     if (!text || busy) return;
     const replyId = nextId();
+    const before = snapshotPose();
     setMessages((prev) => [...prev, { id: nextId(), role: "user", text }, { id: replyId, role: "assistant", items: [] }]);
     setSent((s) => [...s.filter((x) => x !== text), text].slice(-30));
     setRecall(-1);
@@ -224,14 +284,24 @@ export function AiAgentPanel({
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     try {
+      const spendBlocked = provider !== "cursor" && usePreferencesStore.getState().isCopilotSpendBlocked();
       if (provider === "cursor") await runPlanner(text, replyId);
-      else if (noKey)
+      else if (spendBlocked) {
+        const cap = usePreferencesStore.getState().copilotSpendCapUsd;
+        await runPlanner(
+          text,
+          replyId,
+          `Monthly spend cap ($${cap.toFixed(2)}) reached, so the built-in planner ran this. Raise or reset the cap in Preferences → Copilot.`,
+        );
+      } else if (noKey)
         await runPlanner(text, replyId, `No ${providerName} key, so the built-in planner ran this. Add one under Key, or set ${st?.keyEnv ?? KEY_ENV[provider]} in .env.local and restart.`);
       else await runAgent(text, replyId, ctrl.signal);
     } catch (err) {
       const aborted = err instanceof DOMException && err.name === "AbortError";
       update(replyId, (m) => (aborted ? { ...m, note: "Stopped." } : { ...m, error: err instanceof Error ? err.message : "Something went wrong" }));
     } finally {
+      const diffs = diffPoses(before, snapshotPose());
+      if (diffs.length) setPoseDiff(diffs);
       setBusy(false);
       setStep(0);
       abortRef.current = null;
@@ -240,12 +310,25 @@ export function AiAgentPanel({
 
   /** Coach buttons run through the same executor; a note keeps the model's history accurate. */
   const runDirect = async (tool: string, args: Record<string, unknown>, summary: string) => {
+    const before = snapshotPose();
     const results = await executeCopilotActions([{ tool, args, summary }], host);
     setMessages((prev) => [...prev, { id: nextId(), role: "assistant", items: results.map((r) => ({ kind: "result", result: r })) }]);
     record({ role: "user", text: `[Studio note] I clicked “${summary}” in the suggestions. Result: ${results[0]?.message ?? ""}` });
+    const diffs = diffPoses(before, snapshotPose());
+    if (diffs.length) setPoseDiff(diffs);
   };
   const applyCard = (card: CueCard) => runDirect("apply_suggestion", { id: card.id }, card.fixLabel ?? card.title);
   const fixAll = () => runDirect("fix_all", {}, "Apply all coach fixes");
+  const fixThisFrame = () => {
+    const s = useStudioStore.getState();
+    const frame = Math.round(s.currentTime * (s.project.animations[s.activeClip]?.fps || 30));
+    const first = cards.find((c) => c.apply);
+    if (!first) {
+      setMessages((prev) => [...prev, { id: nextId(), role: "assistant", note: `No fixable coach suggestions at frame ${frame}.` }]);
+      return;
+    }
+    void runDirect("apply_suggestion", { id: first.id, frame }, `Fix this frame (${first.title})`);
+  };
 
   const newChat = () => {
     abortRef.current?.abort();
@@ -271,6 +354,16 @@ export function AiAgentPanel({
             {badge}
           </span>
           <div className="flex-1" />
+          <button
+            type="button"
+            onClick={fixThisFrame}
+            disabled={busy || fixable === 0}
+            className="icon-btn h-7 w-auto px-2 text-[12px] disabled:opacity-40"
+            data-tip="Apply the first coach fix at the playhead"
+            data-tip-side="bottom"
+          >
+            Fix frame
+          </button>
           {messages.length > 0 && (
             <button onClick={newChat} className="icon-btn h-7 w-auto px-2 text-[12px]" data-tip="Clear the conversation" data-tip-side="bottom">
               New
@@ -314,7 +407,10 @@ export function AiAgentPanel({
               <>
                 <input
                   value={model}
-                  onChange={(e) => setModel(e.target.value)}
+                  onChange={(e) => {
+                    setModel(e.target.value);
+                    usePreferencesStore.getState().setCopilotModelDefault(e.target.value);
+                  }}
                   placeholder={`Model (default ${st?.model ?? "from server"})`}
                   list={`models-${provider}`}
                   aria-label="Model id"
@@ -428,6 +524,24 @@ export function AiAgentPanel({
         )}
       </div>
 
+      {poseDiff && poseDiff.length > 0 && (
+        <div className="mx-2.5 mb-2 rounded-[10px] border border-[var(--separator)] bg-[var(--fill-3)] p-2 text-[11px] animate-panel-in">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <span className="font-semibold text-[var(--label)]">{poseDiff.length} bones changed · Review</span>
+            <button type="button" className="text-[var(--label-3)] hover:text-[var(--label)]" onClick={() => setPoseDiff(null)}>
+              Dismiss
+            </button>
+          </div>
+          <ul className="max-h-24 overflow-y-auto space-y-0.5 tabular-nums text-[var(--label-2)]">
+            {poseDiff.map((d) => (
+              <li key={d.bone}>
+                {d.bone}: Δx {d.dx.toFixed(3)} · Δy {d.dy.toFixed(3)} · Δr {d.dr.toFixed(1)}°
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Composer */}
       <form
         className="p-2.5 border-t border-[var(--separator)] flex gap-2 items-end shrink-0"
@@ -436,6 +550,19 @@ export function AiAgentPanel({
           void send(input);
         }}
       >
+        <button
+          type="button"
+          onClick={toggleVoice}
+          className={`icon-btn h-8 w-8 shrink-0 ${listening ? "bg-[var(--accent)] text-white" : ""}`}
+          aria-pressed={listening}
+          data-tip={listening ? "Stop listening" : "Voice prompt"}
+          aria-label="Voice prompt"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+            <path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3Z" />
+            <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8" />
+          </svg>
+        </button>
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -476,3 +603,15 @@ export function AiAgentPanel({
     </aside>
   );
 }
+
+// Minimal DOM speech types (not always in TS lib for this target).
+type SpeechRecognition = {
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((ev: SpeechRecognitionEvent) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+type SpeechRecognitionEvent = { results: ArrayLike<ArrayLike<{ transcript?: string }>> };

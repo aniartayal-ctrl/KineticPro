@@ -13,6 +13,36 @@ import { buildPartMesh } from "./weights";
 import type { PartMeshData, SpineForgeProject } from "./schema";
 import type { BuiltSkeleton } from "./solver";
 
+/** User camera on top of the fit-to-window baseline (session-only; not part of the project). */
+export type ViewCamera = { zoom: number; panX: number; panY: number };
+
+export const VIEW_ZOOM_MIN = 0.25;
+export const VIEW_ZOOM_MAX = 8;
+/** Keyboard / button zoom step (multiplicative). */
+export const VIEW_ZOOM_STEP = 1.12;
+
+/** Fit-to-window metrics, then optional zoom/pan. Shared by WebGL, overlay, and store zoomAt. */
+export function computeViewMetrics(
+  project: Pick<SpineForgeProject, "width" | "height" | "frame">,
+  width: number,
+  height: number,
+  camera?: Partial<ViewCamera> | null,
+): { scale: number; offsetX: number; offsetY: number; artW: number; artH: number; fitScale: number } {
+  const { width: artW, height: artH, frame } = project;
+  const leftM = frame.left ?? 0.25;
+  const rightM = frame.right ?? 0.25;
+  const topM = frame.top ?? 0.2;
+  const bottomM = frame.bottom ?? 0.05;
+  const spanW = artW * (1 + leftM + rightM);
+  const spanH = artH * (1 + topM + bottomM);
+  const fitScale = Math.min(width / spanW, height / spanH);
+  const zoom = camera?.zoom ?? 1;
+  const scale = fitScale * zoom;
+  const offsetX = (width - spanW * fitScale) / 2 + leftM * artW * fitScale + (camera?.panX ?? 0);
+  const offsetY = (height - spanH * fitScale) / 2 + topM * artH * fitScale + (camera?.panY ?? 0);
+  return { scale, offsetX, offsetY, artW, artH, fitScale };
+}
+
 const VERTEX_SHADER = `#version 300 es
 in vec2 aPos;
 in vec2 aDeform;
@@ -290,18 +320,8 @@ export class SpineForgeWebGLRenderer {
     }
   }
 
-  getViewMetrics(width: number, height: number) {
-    const { width: artW, height: artH, frame } = this.skeleton.project;
-    const leftM = frame.left ?? 0.25;
-    const rightM = frame.right ?? 0.25;
-    const topM = frame.top ?? 0.2;
-    const bottomM = frame.bottom ?? 0.05;
-    const spanW = artW * (1 + leftM + rightM);
-    const spanH = artH * (1 + topM + bottomM);
-    const scale = Math.min(width / spanW, height / spanH);
-    const offsetX = (width - spanW * scale) / 2 + leftM * artW * scale;
-    const offsetY = (height - spanH * scale) / 2 + topM * artH * scale;
-    return { scale, offsetX, offsetY, artW, artH };
+  getViewMetrics(width: number, height: number, camera?: ViewCamera | null) {
+    return computeViewMetrics(this.skeleton.project, width, height, camera);
   }
 
   draw(options: {
@@ -313,6 +333,10 @@ export class SpineForgeWebGLRenderer {
     selectedPart?: string | null;
     isolateSelectedPart?: boolean;
     fixedSize?: { width: number; height: number };
+    /** Cap / override for devicePixelRatio (from Preferences → Performance). */
+    pixelRatio?: number;
+    /** Session camera (zoom/pan) on top of fit-to-window. */
+    camera?: ViewCamera | null;
     skinTintHex?: string;
     rimHex?: string;
     flashHex?: string;
@@ -321,19 +345,20 @@ export class SpineForgeWebGLRenderer {
     ghostFrames?: GhostFramePass[];
   }): void {
     const { gl, canvas } = this;
+    const dpr = Math.max(0.75, Math.min(2, options.pixelRatio ?? Math.min(window.devicePixelRatio || 1, 2)));
     const width = options.fixedSize
       ? options.fixedSize.width
-      : Math.max(1, Math.round(canvas.clientWidth * Math.min(window.devicePixelRatio || 1, 2)));
+      : Math.max(1, Math.round(canvas.clientWidth * dpr));
     const height = options.fixedSize
       ? options.fixedSize.height
-      : Math.max(1, Math.round(canvas.clientHeight * Math.min(window.devicePixelRatio || 1, 2)));
+      : Math.max(1, Math.round(canvas.clientHeight * dpr));
 
     if (canvas.width !== width || canvas.height !== height) {
       canvas.width = width;
       canvas.height = height;
     }
 
-    const { scale, offsetX, offsetY } = this.getViewMetrics(width, height);
+    const { scale, offsetX, offsetY } = this.getViewMetrics(width, height, options.camera);
 
     gl.viewport(0, 0, width, height);
     gl.clearColor(0, 0, 0, 0);

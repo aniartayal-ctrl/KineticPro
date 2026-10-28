@@ -8,12 +8,13 @@ import {
   EASE_SINE_IN_OUT,
   sampleTransformTrack,
 } from "@/core/animator";
-import { getThemeSymbols } from "@/core/batch-symbols-and-slot-stage";
+import { getThemeSymbols } from "@/core/batch-symbols";
 import { VOICE_PHRASE_PRESETS } from "@/core/parallax-and-lipsync";
-import { projectFromCut, type CutResult } from "@/core/import-project";
+import { IMPORT_IMAGE_ACCEPT, importCharacterFile } from "@/core/import-character";
 import { RIG_BONE_PALETTE, type CurveType, type SpineForgeProject } from "@/core/schema";
 import { generateUnity2DColliders } from "@/core/vfx-colliders-profiler";
 import type { AutoWeightMode, FfdLiquifyMode, WeightBrushMode } from "@/core/weights";
+import { usePreferencesStore } from "@/store/usePreferencesStore";
 import { useReadoutTime, useStudioNoTime } from "@/store/useStudioStore";
 import { AutoModeDock } from "./AutoModeDock";
 import { BUILTIN_PROJECTS, heroTemplate } from "./ProjectsMenu";
@@ -56,6 +57,8 @@ export function LeftToolOptionsPane({
   isExporting,
   onDownloadZip,
   onExportWebM,
+  onUnityPreview,
+  onOpenSymbol,
 }: {
   /** Opens a freshly cut character (asking about unsaved work first); resolves to a status line. */
   onImported?: (project: SpineForgeProject) => Promise<string>;
@@ -65,6 +68,8 @@ export function LeftToolOptionsPane({
   isExporting?: boolean;
   onDownloadZip?: () => void;
   onExportWebM?: () => void;
+  onUnityPreview?: () => void;
+  onOpenSymbol?: (role: string, title: string) => void;
 }) {
   const {
     project,
@@ -143,31 +148,9 @@ export function LeftToolOptionsPane({
     setCutterFailed(false);
     setCutterStatus("Cutting layers and filling the body behind the limbs…");
     try {
-      const defaultCutConfig = {
-        trimSource: alphaThreshold > 0,
-        jointCoverRadius,
-        inpaintTorso,
-        capsules: {
-          head: [[0.5, 0.08, 0.5, 0.16, 0.09]],
-          "arm-back": [[0.3, 0.25, 0.28, 0.48, 0.07]],
-          "arm-front": [[0.72, 0.22, 0.85, 0.44, 0.08]],
-          weapon: [[0.82, 0.45, 0.85, 0.92, 0.12]],
-        },
-        priority: ["weapon", "arm-front", "arm-back", "head"],
-        occluders: inpaintTorso ? ["weapon", "arm-front", "arm-back"] : [],
-        order: ["body", "head", "arm-back", "weapon", "arm-front"],
-      };
-      const form = new FormData();
-      form.append("file", file);
-      form.append("projectId", file.name.replace(/\.[^.]+$/, ""));
-      form.append("config", JSON.stringify(defaultCutConfig));
-
-      const res = await fetch("/api/cut-parts", { method: "POST", body: form });
-      const data = (await res.json().catch(() => ({}))) as Partial<CutResult> & { error?: string };
-      if (!res.ok) throw new Error(data.error || `Cut failed (${res.status})`);
-      if (!data.parts?.length || !data.projectId || !data.heroSrc) throw new Error("The cutter found no layers in this image.");
-      const found = `Cut ${data.parts.length} layers (${data.width}×${data.height}).`;
-      setCutterStatus(onImported ? `${found} ${await onImported(projectFromCut(data as CutResult, file.name))}` : found);
+      const project = await importCharacterFile(file, { alphaThreshold, jointCoverRadius, inpaintTorso });
+      const found = `Cut ${project.parts.length} layers (${project.width}×${project.height}).`;
+      setCutterStatus(onImported ? `${found} ${await onImported(project)}` : found);
     } catch (err) {
       setCutterFailed(true);
       setCutterStatus(err instanceof Error ? err.message : "Import failed");
@@ -176,7 +159,7 @@ export function LeftToolOptionsPane({
 
   return (
     <aside
-      className={`pointer-events-auto w-[320px] rounded-[var(--radius-panel)] liquid-glass flex flex-col overflow-hidden transition-all ${
+      className={`pointer-events-auto w-full rounded-[var(--radius-panel)] liquid-glass flex flex-col overflow-hidden transition-all ${
         isShaded ? "shrink-0" : "flex-1 min-h-0"
       }`}
     >
@@ -296,7 +279,7 @@ export function LeftToolOptionsPane({
               </p>
               <input
                 type="file"
-                accept=".png,.webp,.psd"
+                accept={IMPORT_IMAGE_ACCEPT}
                 aria-label="Import a PSD or PNG character"
                 onChange={(e) => {
                   const f = e.target.files?.[0];
@@ -315,6 +298,27 @@ export function LeftToolOptionsPane({
                 </div>
               )}
             </div>
+
+            {onOpenSymbol && (
+              <div className="p-3 rounded-2xl liquid-glass-well space-y-2">
+                <span className="section-title">Symbol swap set</span>
+                <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+                  {themeSymbols.map((sym) => (
+                    <button
+                      key={sym.role}
+                      type="button"
+                      onClick={() => onOpenSymbol(sym.role, sym.label)}
+                      className="shrink-0 w-14 flex flex-col items-center gap-1"
+                      data-tip={sym.label}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={sym.src} alt="" className="h-10 w-10 object-contain rounded-lg bg-black/30 border border-white/10" />
+                      <span className="text-[9px] text-[var(--label-3)] truncate w-full text-center">{sym.role}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Smart Part Cutter & Joint Cover Options */}
             <div className="p-3 rounded-2xl liquid-glass-well space-y-2.5">
@@ -878,7 +882,11 @@ export function LeftToolOptionsPane({
                   onChange={(e) => {
                     const nextAlgo = e.target.value as AutoWeightMode;
                     setWeightAlgo(nextAlgo);
-                    regeneratePartMesh(currentPartObj.name, currentPartObj.meshDensity ?? "medium", nextAlgo);
+                    regeneratePartMesh(
+                      currentPartObj.name,
+                      currentPartObj.meshDensity ?? usePreferencesStore.getState().meshDensityDefault,
+                      nextAlgo,
+                    );
                   }}
                   className="w-full bg-white/10 border border-white/20 rounded-xl px-2.5 py-1.5 text-xs text-sky-200 font-semibold focus:outline-none"
                 >
@@ -946,6 +954,33 @@ export function LeftToolOptionsPane({
                     }`}
                   >
                     {bm}
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-3 gap-1">
+                {(
+                  [
+                    { label: "Soft", mode: "smooth" as WeightBrushMode, strength: 0.35, radius: 90 },
+                    { label: "Hard", mode: "replace" as WeightBrushMode, strength: 0.95, radius: 40 },
+                    { label: "Weapon", mode: "add" as WeightBrushMode, strength: 0.8, radius: 55 },
+                  ] as const
+                ).map((p) => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    onClick={() => {
+                      setBrushMode(p.mode);
+                      setBrushStrength(p.strength);
+                      setBrushRadius(p.radius);
+                      if (p.label === "Weapon") {
+                        const weapon = project.bones.find((b) => /weapon|hammer|staff|sword/i.test(b.name));
+                        if (weapon) selectBone(weapon.name);
+                      }
+                    }}
+                    className="py-1.5 rounded-full text-[11px] font-bold liquid-glass-button"
+                  >
+                    {p.label}
                   </button>
                 ))}
               </div>
@@ -1138,9 +1173,29 @@ export function LeftToolOptionsPane({
                   >
                     Record .webm
                   </button>
+                  {onUnityPreview && (
+                    <button
+                      onClick={onUnityPreview}
+                      className="col-span-2 py-1.5 px-2.5 rounded-full liquid-glass-button text-[var(--label)] text-[11px] font-semibold"
+                    >
+                      Unity sheet preview
+                    </button>
+                  )}
                 </div>
               )}
             </div>
+
+            {exportData && (
+              <div className="p-3 rounded-2xl liquid-glass-well space-y-1.5">
+                <span className="section-title">Atlas packing</span>
+                <p className="text-[11px] text-[var(--label-2)] leading-snug">
+                  MaxRects page · {Math.round((exportData.atlasDataUrl.length * 0.75) / 1024)} KB data URL
+                  {exportData.spineAtlasTxt ? ` · ${exportData.spineAtlasTxt.split("\n").filter((l) => l.trim()).length} atlas lines` : ""}
+                </p>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={exportData.atlasDataUrl} alt="" className="max-h-28 object-contain rounded-lg border border-white/10 mx-auto" />
+              </div>
+            )}
 
             {exportData && (
               <>

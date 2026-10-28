@@ -44,6 +44,8 @@ test("Spine's documented default hotkeys trigger the matching Kinetic commands",
     ["Shift+F", "time.prev10"],
     ["Mod+R", "clip.toggleLoop"],
     ["H", "layer.toggleVisibility"],
+    ["Shift+H", "layer.solo"],
+    ["Comma", "key.breakdown"],
     ["Equal", "drawOrder.up"],
     ["Shift+Equal", "drawOrder.up5"],
     ["Minus", "drawOrder.down"],
@@ -78,8 +80,25 @@ test("modifiers must match exactly, and Ctrl works as Mod on every platform", ()
   assert.equal(eventMatches(ev("Mod+R"), "R"), false);
   assert.equal(commandForEvent({ key: "r", code: "KeyR", ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }), "clip.toggleLoop");
   assert.equal(commandForEvent({ key: "?", code: "Slash", ctrlKey: false, metaKey: false, shiftKey: true, altKey: false }), "panel.help");
+  assert.equal(
+    commandForEvent({ key: ",", code: "Comma", ctrlKey: false, metaKey: true, shiftKey: false, altKey: false }),
+    "panel.preferences",
+  );
+  assert.equal(
+    commandForEvent(
+      { key: "p", code: "KeyP", ctrlKey: false, metaKey: true, shiftKey: false, altKey: false },
+      { "panel.preferences": ["Mod+P"] },
+    ),
+    "panel.preferences",
+  );
   // Alt combos are not bound (Alt+letter types special characters on macOS).
   assert.equal(commandForEvent({ key: "ç", code: "KeyC", ctrlKey: false, metaKey: false, shiftKey: false, altKey: true }), null);
+  // View zoom keeps bare =/− as draw order (Spine).
+  assert.equal(commandForEvent(ev("Mod+Equal")), "view.zoomIn");
+  assert.equal(commandForEvent(ev("Mod+Minus")), "view.zoomOut");
+  assert.equal(commandForEvent(ev("Mod+0")), "view.reset");
+  assert.equal(commandForEvent(ev("Equal")), "drawOrder.up");
+  assert.equal(commandForEvent(ev("Minus")), "drawOrder.down");
 });
 
 test("unsupported Spine keys explain themselves, and combos format per platform", () => {

@@ -2,21 +2,14 @@
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { SpineForgeAnimator } from "@/core/animator";
-import { getSlotStageContext } from "@/core/batch-symbols-and-slot-stage";
 import { compute25DParallaxBoneOffsets } from "@/core/parallax-and-lipsync";
 import { patchKeyAt, snapTime, type Channel } from "@/core/keyframes";
 import { RIG_BONE_PALETTE, type TransformKey } from "@/core/schema";
-import {
-  BONUS_WHEEL_WEDGES,
-  evaluateBigWinChoreography,
-  evaluateBonusWheelChoreography,
-  evaluateTumbleCascadeChoreography,
-  type SlotSuiteStageMode,
-} from "@/core/slot-animation-suite";
 import { applyAffine, buildSkeleton, deformMeshVerticesCPU } from "@/core/solver";
 import { evaluateElementalVfx, generateUnity2DColliders } from "@/core/vfx-colliders-profiler";
-import { SpineForgeWebGLRenderer, type GhostFramePass } from "@/core/webgl-renderer";
+import { SpineForgeWebGLRenderer, type GhostFramePass, type ViewCamera } from "@/core/webgl-renderer";
 import { buildPartMesh, computeVertexHeatmapColors } from "@/core/weights";
+import { usePreferencesStore } from "@/store/usePreferencesStore";
 import { useStudioNoTime, useStudioStore } from "@/store/useStudioStore";
 
 const edgeCache = new WeakMap<object, Uint32Array>();
@@ -64,15 +57,7 @@ export function StudioViewport() {
     swapToPreviousTool,
     setCurrentTime,
     setParallaxConfig,
-    showSlotStage,
-    slotStageMode,
-    slotOrientation,
-    setSlotStageMode,
-    setSlotOrientation,
-    requestDocument,
   } = useStudioNoTime();
-  // The canvas draws itself every frame; React only needs the playhead for the slot stage overlay.
-  const stageTime = useStudioStore((s) => (s.showSlotStage ? s.currentTime : 0));
 
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -97,6 +82,7 @@ export function StudioViewport() {
     moved: boolean;
   } | null>(null);
   const isPaintingRef = useRef(false);
+  const panningRef = useRef<{ pointerId: number; lastX: number; lastY: number } | null>(null);
   const [loadedProjectId, setLoadedProjectId] = useState<string>("");
 
   // Decode part images and initialize WebGL2 renderer
@@ -172,7 +158,15 @@ export function StudioViewport() {
     window.addEventListener("pointerdown", onActivity, { passive: true });
     window.addEventListener("resize", onActivity);
 
+    let lastFrameAt = 0;
     const tick = (now: number) => {
+      const prefs = usePreferencesStore.getState();
+      const minFrameMs = 1000 / Math.max(30, prefs.maxFps);
+      if (now - lastFrameAt < minFrameMs - 0.5) {
+        rafId = requestAnimationFrame(tick);
+        return;
+      }
+      lastFrameAt = now;
       const dt = Math.min(0.05, (now - lastNow) / 1000) * playbackSpeed;
       lastNow = now;
 
@@ -201,25 +195,33 @@ export function StudioViewport() {
           evalTime = 0;
         }
 
-        // Compute Onion-Skinning ghost passes if enabled
+        // Onion-skin: depth pairs of prev/next ghosts (Preferences → onionSkinDepth / opacity).
         const ghostFrames: GhostFramePass[] = [];
         if (store.showOnionSkin && ghostAnim && store.mode !== "rig" && store.mode !== "mesh") {
+          const prefs = usePreferencesStore.getState();
+          const depth = prefs.onionSkinDepth;
+          const baseOp = prefs.onionSkinOpacity;
           ghostAnim.setClip(store.activeClip);
-          const prevFrame = ghostAnim.evaluateAt(
-            ((evalTime - 0.14) % duration + duration) % duration,
-            0,
-          );
-          const prevSkin = new Float32Array(prevFrame.skin);
-          const prevOrder = prevFrame.order.filter((n) => !store.hiddenParts.includes(n));
-
-          const nextFrame = ghostAnim.evaluateAt((evalTime + 0.14) % duration, 0);
-          const nextSkin = new Float32Array(nextFrame.skin);
-          const nextOrder = nextFrame.order.filter((n) => !store.hiddenParts.includes(n));
-
-          ghostFrames.push(
-            { skin: prevSkin, order: prevOrder, tint: [0.15, 0.85, 1.0, 0.22] },
-            { skin: nextSkin, order: nextOrder, tint: [1.0, 0.38, 0.78, 0.18] },
-          );
+          const step = 0.1;
+          for (let i = depth; i >= 1; i--) {
+            const fade = baseOp * (1 - (i - 1) / (depth + 0.5));
+            const prevT = ((evalTime - step * i) % duration + duration) % duration;
+            const nextT = (evalTime + step * i) % duration;
+            const prevFrame = ghostAnim.evaluateAt(prevT, 0);
+            const nextFrame = ghostAnim.evaluateAt(nextT, 0);
+            ghostFrames.push(
+              {
+                skin: new Float32Array(prevFrame.skin),
+                order: prevFrame.order.filter((n) => !store.hiddenParts.includes(n)),
+                tint: [0.15, 0.85, 1.0, fade],
+              },
+              {
+                skin: new Float32Array(nextFrame.skin),
+                order: nextFrame.order.filter((n) => !store.hiddenParts.includes(n)),
+                tint: [1.0, 0.38, 0.78, fade * 0.85],
+              },
+            );
+          }
         }
 
         animator.setClip(store.activeClip);
@@ -239,12 +241,19 @@ export function StudioViewport() {
           0.68,
         ];
 
+        const pixelRatio = Math.max(0.75, Math.min(2, usePreferencesStore.getState().pixelRatio));
+        const camera: ViewCamera = { zoom: store.viewZoom, panX: store.viewPanX, panY: store.viewPanY };
         renderer.draw({
           skin: frame.skin,
           order: visibleOrder,
           deforms: frame.deforms,
           flash: frame.fx.flash,
-          heatmapMix: store.showHeatmap ? 0.78 : 0,
+          heatmapMix:
+            store.showHeatmap || store.mode === "weights"
+              ? store.mode === "weights" && !store.showHeatmap
+                ? 0.55
+                : 0.78
+              : 0,
           selectedPart: store.selectedPart,
           isolateSelectedPart: store.isolatePart,
           skinTintHex: activeSkinObj?.tint,
@@ -253,20 +262,23 @@ export function StudioViewport() {
           lightDir,
           lightIntensity: store.enable3DRelight ? store.lightIntensity : 0,
           ghostFrames,
+          pixelRatio,
+          camera,
         });
 
         // Draw 2D gizmo overlay (wireframe, motion arcs, weapon slash trails, capsules, bones, brush cursor)
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const dpr = pixelRatio;
         const w = Math.max(1, Math.round(overlay.clientWidth * dpr));
         const h = Math.max(1, Math.round(overlay.clientHeight * dpr));
         if (overlay.width !== w || overlay.height !== h) {
           overlay.width = w;
           overlay.height = h;
         }
+        store.setViewCanvasSize(w, h);
 
         const ctx = overlay.getContext("2d")!;
         ctx.clearRect(0, 0, w, h);
-        const { scale, offsetX, offsetY } = renderer.getViewMetrics(w, h);
+        const { scale, offsetX, offsetY } = renderer.getViewMetrics(w, h, camera);
         const toScreen = (rx: number, ry: number): [number, number] => [
           rx * scale + offsetX,
           ry * scale + offsetY,
@@ -553,6 +565,40 @@ export function StudioViewport() {
               ctx.fillText(badge, bx + 10, by - 5);
             }
           });
+
+          // IK pole / stretch readout for the selected chain.
+          for (const ik of store.project.ikConstraints ?? []) {
+            const tipIdx = store.project.bones.findIndex((b) => b.name === ik.target);
+            const boneIdxs = ik.bones.map((n) => store.project.bones.findIndex((b) => b.name === n)).filter((i) => i >= 0);
+            if (tipIdx < 0 || boneIdxs.length === 0) continue;
+            const tipMat = frame.world[tipIdx]!;
+            const [tx, ty] = toScreen(tipMat[4], tipMat[5]);
+            const rootIdx = boneIdxs[0]!;
+            const rootMat = frame.world[rootIdx]!;
+            const [rx, ry] = toScreen(rootMat[4], rootMat[5]);
+            const midIdx = boneIdxs[Math.floor(boneIdxs.length / 2)]!;
+            const midMat = frame.world[midIdx]!;
+            const [mx, my] = toScreen(midMat[4], midMat[5]);
+            const selectedIk = store.selectedBone === ik.target || ik.bones.includes(store.selectedBone ?? "");
+            if (!selectedIk && !store.lockIkEndEffector) continue;
+            ctx.setLineDash([4, 4]);
+            ctx.strokeStyle = selectedIk ? "#fde047" : "rgba(253, 224, 71, 0.45)";
+            ctx.lineWidth = 1.25;
+            ctx.beginPath();
+            ctx.moveTo(rx, ry);
+            ctx.lineTo(mx - (ty - ry) * 0.15, my + (tx - rx) * 0.15);
+            ctx.lineTo(tx, ty);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            const stretch = Math.hypot(tipMat[4] - rootMat[4], tipMat[5] - rootMat[5]) / Math.max(1, store.project.height);
+            ctx.font = "600 10px -apple-system, SF Mono, ui-monospace, monospace";
+            ctx.fillStyle = "#fde047";
+            ctx.fillText(
+              `${ik.name || ik.target} · stretch ${stretch.toFixed(2)}${store.lockIkEndEffector ? " · EE lock" : ""}`,
+              tx + 12,
+              ty + 14,
+            );
+          }
         }
 
         // 4. Draw Brush Cursor when in Weight Painter or Liquify FFD mode
@@ -602,7 +648,8 @@ export function StudioViewport() {
         const m = animator.evaluateAt(s.mode === "rig" || s.mode === "mesh" ? 0 : s.currentTime, 0).world[idx]!;
         const rect = overlay.getBoundingClientRect();
         const dpr = overlay.width / Math.max(1, rect.width);
-        const { scale, offsetX, offsetY } = renderer.getViewMetrics(overlay.width, overlay.height);
+        const camera: ViewCamera = { zoom: s.viewZoom, panX: s.viewPanX, panY: s.viewPanY };
+        const { scale, offsetX, offsetY } = renderer.getViewMetrics(overlay.width, overlay.height, camera);
         return { x: rect.left + (m[4] * scale + offsetX) / dpr, y: rect.top + (m[5] * scale + offsetY) / dpr };
       },
       state: () => {
@@ -630,6 +677,11 @@ export function StudioViewport() {
     };
   }, []);
 
+  const viewCamera = (): ViewCamera => {
+    const s = useStudioStore.getState();
+    return { zoom: s.viewZoom, panX: s.viewPanX, panY: s.viewPanY };
+  };
+
   const eventToRigCoords = (e: ReactPointerEvent<HTMLCanvasElement>): { x: number; y: number } | null => {
     const overlay = overlayCanvasRef.current;
     const renderer = rendererRef.current;
@@ -638,7 +690,7 @@ export function StudioViewport() {
     const dpr = overlay.width / Math.max(1, rect.width);
     const canvasX = (e.clientX - rect.left) * dpr;
     const canvasY = (e.clientY - rect.top) * dpr;
-    const { scale, offsetX, offsetY } = renderer.getViewMetrics(overlay.width, overlay.height);
+    const { scale, offsetX, offsetY } = renderer.getViewMetrics(overlay.width, overlay.height, viewCamera());
     return {
       x: (canvasX - offsetX) / scale,
       y: (canvasY - offsetY) / scale,
@@ -646,6 +698,21 @@ export function StudioViewport() {
   };
 
   const handlePointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+    // Middle mouse: pan the viewport (Spine-style navigation companion to zoom).
+    if (e.button === 1) {
+      e.preventDefault();
+      const overlay = overlayCanvasRef.current;
+      if (!overlay) return;
+      const rect = overlay.getBoundingClientRect();
+      const dpr = overlay.width / Math.max(1, rect.width);
+      panningRef.current = {
+        pointerId: e.pointerId,
+        lastX: (e.clientX - rect.left) * dpr,
+        lastY: (e.clientY - rect.top) * dpr,
+      };
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
     if (e.button !== 0) return; // right-click swaps tools (onContextMenu); never start a drag with it
     const pt = eventToRigCoords(e);
     if (!pt) return;
@@ -711,6 +778,21 @@ export function StudioViewport() {
   };
 
   const handlePointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+    const pan = panningRef.current;
+    if (pan && pan.pointerId === e.pointerId) {
+      const overlay = overlayCanvasRef.current;
+      if (!overlay) return;
+      const rect = overlay.getBoundingClientRect();
+      const dpr = overlay.width / Math.max(1, rect.width);
+      const x = (e.clientX - rect.left) * dpr;
+      const y = (e.clientY - rect.top) * dpr;
+      const s = useStudioStore.getState();
+      s.setViewPan(s.viewPanX + (x - pan.lastX), s.viewPanY + (y - pan.lastY));
+      pan.lastX = x;
+      pan.lastY = y;
+      return;
+    }
+
     const pt = eventToRigCoords(e);
     if (!pt) return;
     const prevPt = lastBrushRigPosRef.current ?? pt;
@@ -782,6 +864,7 @@ export function StudioViewport() {
   };
 
   const handlePointerUp = () => {
+    panningRef.current = null;
     const drag = draggingBoneRef.current;
     const painted = isPaintingRef.current;
     isPaintingRef.current = false;
@@ -812,6 +895,32 @@ export function StudioViewport() {
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onWheel={(e) => {
+          // ⌥+scroll: step frames (existing). Plain scroll / trackpad pinch: zoom toward cursor.
+          if (e.altKey) {
+            e.preventDefault();
+            const s = useStudioStore.getState();
+            const clip = s.project.animations[s.activeClip];
+            if (!clip) return;
+            const fps = clip.fps || 30;
+            const frameDelta = e.deltaY > 0 ? 1 : -1;
+            const next = Math.max(0, Math.min(clip.duration, s.currentTime + frameDelta / fps));
+            s.setIsPlaying(false);
+            s.setCurrentTime(Number(next.toFixed(4)));
+            return;
+          }
+          e.preventDefault();
+          const overlay = overlayCanvasRef.current;
+          if (!overlay) return;
+          const rect = overlay.getBoundingClientRect();
+          const dpr = overlay.width / Math.max(1, rect.width);
+          const ax = (e.clientX - rect.left) * dpr;
+          const ay = (e.clientY - rect.top) * dpr;
+          // Pinch on macOS Chrome arrives as ctrlKey + wheel; use a slightly stronger step.
+          const sensitivity = e.ctrlKey ? 0.01 : 0.0015;
+          const factor = Math.exp(-e.deltaY * sensitivity);
+          useStudioStore.getState().zoomAt(factor, ax, ay, overlay.width, overlay.height);
+        }}
         onContextMenu={(e) => {
           e.preventDefault();
           swapToPreviousTool();
@@ -823,263 +932,8 @@ export function StudioViewport() {
         className={`absolute inset-0 w-full h-full ${
           mode === "weights" || mode === "liquify" ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing"
         }`}
+        style={{ touchAction: "none" }}
       />
-
-      {/* In-Viewport Slot Game Animation Suite Stage Director */}
-      {showSlotStage && (
-        <div
-          className={`absolute left-1/2 top-18 -translate-x-1/2 z-10 pointer-events-auto rounded-[28px] liquid-glass p-4 border border-amber-400/40 shadow-[0_0_60px_rgba(251,191,36,0.22)] flex flex-col items-center gap-3 ${
-            slotOrientation === "portrait_9_16" ? "w-[360px]" : "w-[540px]"
-          }`}
-        >
-          {(() => {
-            const stageCtx = getSlotStageContext(project.id);
-            const activeStage: SlotSuiteStageMode =
-              slotStageMode === "off" ? "reel_tumble_cascade" : slotStageMode;
-            const clipDur = Math.max(0.5, project.animations[activeClip]?.duration ?? 2.0);
-            const normProgress = (stageTime % clipDur) / clipDur;
-            const bigWinFrame = evaluateBigWinChoreography(normProgress, 100, 75);
-            const tumbleFrame = evaluateTumbleCascadeChoreography(project.id, stageTime, 2.0);
-            const wheelFrame = evaluateBonusWheelChoreography(normProgress);
-            const baseDir = project.id.includes("solara")
-              ? "/presets/sands-of-solara"
-              : "/presets/astral-forge";
-
-            return (
-              <>
-                {/* Top Stage Director Bar: 7 Slot Animation Modes + 16:9 / 9:16 Orientation Switcher */}
-                <div className="flex flex-wrap items-center justify-between w-full gap-1.5 text-[10px]">
-                  <div className="flex flex-wrap items-center gap-1 p-0.5 rounded-full liquid-glass-well">
-                    {(
-                      [
-                        { id: "reel_tumble_cascade", label: "Tumble & 500×" },
-                        { id: "big_win_ladder", label: "Big Win" },
-                        { id: "expanding_wild_reel", label: "1×3 Wild" },
-                        { id: "bonus_wheel", label: "Bonus Wheel" },
-                        { id: "scatter_anticipation", label: "2-Scatter" },
-                        { id: "feature_splash", label: "Splash" },
-                        { id: "hold_and_spin_coins", label: "Coins" },
-                      ] as { id: SlotSuiteStageMode; label: string }[]
-                    ).map((m) => (
-                      <button
-                        key={m.id}
-                        onClick={() => setSlotStageMode(m.id)}
-                        className={`px-2 py-0.5 rounded-full font-bold transition ${
-                          activeStage === m.id
-                            ? "bg-amber-400 text-slate-950"
-                            : "text-slate-300 hover:text-white"
-                        }`}
-                      >
-                        {m.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  <button
-                    onClick={() =>
-                      setSlotOrientation(
-                        slotOrientation === "landscape_16_9" ? "portrait_9_16" : "landscape_16_9",
-                      )
-                    }
-                    className="px-2.5 py-0.5 rounded-full liquid-glass-button font-mono text-sky-200"
-                  >
-                    {slotOrientation === "landscape_16_9" ? "16:9 Desktop" : "9:16 Portrait"}
-                  </button>
-                </div>
-
-                {/* Top Ornate 9-Slice Win / Multiplier Plaque */}
-                <div
-                  style={{ transform: `scale(${activeStage === "big_win_ladder" ? bigWinFrame.plaqueScale : tumbleFrame.plaqueBounceScale})` }}
-                  className="px-5 py-1.5 rounded-full bg-gradient-to-r from-amber-500/30 via-yellow-400/40 to-amber-500/30 border border-amber-300/60 text-xs font-extrabold tracking-wider text-amber-100 shadow-[0_0_20px_rgba(251,191,36,0.35)] transition-transform"
-                >
-                  {activeStage === "big_win_ladder"
-                    ? `${bigWinFrame.activeTier.label} · $${bigWinFrame.currentPayout.toLocaleString("en-US", { minimumFractionDigits: 2 })} (${bigWinFrame.currentMultiplier}×)`
-                    : activeStage === "scatter_anticipation"
-                      ? "⚡ 2 SCATTERS LANDED — REEL 3, 4, 5 ANTICIPATION! ⚡"
-                      : activeStage === "hold_and_spin_coins"
-                        ? "🪙 HOLD & SPIN RESPIN — 3 RESPINS REMAINING 🪙"
-                        : tumbleFrame.plaqueMultiplierText}
-                </div>
-
-                {/* MODE 1: 4-Tier Big Win Celebration & Extruded Title Escalation */}
-                {activeStage === "big_win_ladder" ? (
-                  <div className="relative py-4 flex flex-col items-center justify-center">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={stageCtx.winBanners[bigWinFrame.activeTier.tier]}
-                      alt={bigWinFrame.activeTier.label}
-                      style={{
-                        transform: `scale(${bigWinFrame.bannerScale[0]}, ${bigWinFrame.bannerScale[1]})`,
-                      }}
-                      className="max-h-36 object-contain drop-shadow-[0_0_28px_rgba(251,191,36,0.65)] transition-transform duration-75"
-                    />
-                    <div className="mt-2 font-mono text-2xl font-black text-transparent bg-clip-text bg-gradient-to-b from-white via-yellow-200 to-amber-400 drop-shadow">
-                      ${bigWinFrame.currentPayout.toLocaleString("en-US", { minimumFractionDigits: 2 })}
-                    </div>
-                  </div>
-                ) : activeStage === "bonus_wheel" ? (
-                  /* MODE: Interactive Bonus Wheel of Fortune + Clapper Pin Spring Deflection */
-                  <div className="relative py-3 flex flex-col items-center justify-center">
-                    {/* Top Clapper Pin with Spring Deflection */}
-                    <div
-                      style={{
-                        transform: `rotate(${wheelFrame.clapperAngleDeg}deg)`,
-                        transformOrigin: "50% 0%",
-                      }}
-                      className="z-20 -mb-3 w-5 h-7 bg-gradient-to-b from-amber-300 to-red-500 rounded-b-full border-2 border-white shadow-lg"
-                    />
-                    {/* 8-Wedge Rotating Multiplier Wheel */}
-                    <div
-                      style={{
-                        transform: `rotate(${wheelFrame.wheelAngleDeg}deg)`,
-                        background:
-                          "conic-gradient(#facc15 0deg 45deg, #1e293b 45deg 90deg, #a855f7 90deg 135deg, #0f172a 135deg 180deg, #38bdf8 180deg 225deg, #1e293b 225deg 270deg, #10b981 270deg 315deg, #0f172a 315deg 360deg)",
-                      }}
-                      className="w-44 h-44 rounded-full border-4 border-amber-300 shadow-[0_0_32px_rgba(250,204,21,0.5)] relative flex items-center justify-center"
-                    >
-                      {BONUS_WHEEL_WEDGES.map((w, idx) => (
-                        <span
-                          key={idx}
-                          style={{
-                            transform: `rotate(${idx * 45 + 22.5}deg) translateY(-62px)`,
-                          }}
-                          className="absolute text-[8px] font-black text-white drop-shadow"
-                        >
-                          {w.label}
-                        </span>
-                      ))}
-                      <div className="w-12 h-12 rounded-full bg-slate-950 border-2 border-amber-300 flex items-center justify-center text-[9px] font-black text-amber-300">
-                        SPIN
-                      </div>
-                    </div>
-                  </div>
-                ) : activeStage === "feature_splash" ? (
-                  /* MODE 4: Feature Intro / Outro 3D Splash Banner Choreographer */
-                  <div className="relative py-3 flex flex-col items-center justify-center gap-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={`${baseDir}/title-free.webp`}
-                      alt="Free Spins Splash"
-                      style={{
-                        transform: `scale(${1 + Math.sin(stageTime * 4) * 0.06})`,
-                      }}
-                      className="max-h-28 object-contain drop-shadow-[0_0_24px_rgba(56,189,248,0.65)]"
-                    />
-                    <div
-                      style={{
-                        backgroundImage: `url(${baseDir}/plaque.webp)`,
-                        backgroundSize: "100% 100%",
-                      }}
-                      className="px-8 py-3 text-center text-xs font-extrabold text-amber-100 uppercase tracking-wider"
-                    >
-                      10 FREE SPINS AWARDED · ALL MULTIPLIERS ACCUMULATE!
-                    </div>
-                  </div>
-                ) : (
-                  /* MODES 2, 3, 5: 5×3 Tumble / Cascade Grid, 2-Scatter Reel Fire, or Hold & Spin Coins */
-                  <div className="relative grid grid-cols-5 gap-2 p-2.5 rounded-2xl bg-slate-950/80 border border-amber-400/35">
-                    {[0, 1, 2, 3, 4].map((cIdx) => {
-                      const isAnticipationReel = activeStage === "scatter_anticipation" && cIdx >= 2;
-                      return (
-                        <div
-                          key={cIdx}
-                          className={`flex flex-col gap-2 rounded-xl p-0.5 transition ${
-                            isAnticipationReel
-                              ? "ring-2 ring-cyan-400 shadow-[0_0_24px_#38bdf8] bg-cyan-500/15 animate-pulse"
-                              : ""
-                          }`}
-                        >
-                          {[0, 1, 2].map((rIdx) => {
-                            const cellState =
-                              tumbleFrame.cells.find((cell) => cell.col === cIdx && cell.row === rIdx) ??
-                              tumbleFrame.cells[0]!;
-                            const sym =
-                              stageCtx.symbols.find((s) => s.role === cellState.role) ?? stageCtx.symbols[0]!;
-                            const isCoinMode = activeStage === "hold_and_spin_coins";
-                            const jackpotBadge =
-                              cIdx === 2 && rIdx === 1
-                                ? "GRAND 1000×"
-                                : (cIdx + rIdx) % 2 === 0
-                                  ? "MAJOR 100×"
-                                  : "25×";
-
-                            return (
-                              <button
-                                key={`${cIdx}-${rIdx}`}
-                                onClick={() => requestDocument({ kind: "symbol", id: sym.role, title: sym.label })}
-                                title={`Click to rig & animate ${sym.label}`}
-                                style={{
-                                  transform: `translateY(${cellState.offsetY * 22}px) scale(${cellState.scaleX}, ${cellState.scaleY})`,
-                                  opacity: cellState.opacity,
-                                }}
-                                className={`relative w-14 h-14 rounded-xl p-1 flex flex-col items-center justify-center transition ${
-                                  cellState.isWinning
-                                    ? "bg-amber-400/20 border-2 border-amber-400 shadow-[0_0_14px_rgba(250,204,21,0.5)]"
-                                    : "bg-white/5 border border-white/10"
-                                }`}
-                              >
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                  src={isCoinMode ? stageCtx.coinSrc : sym.src}
-                                  alt={sym.label}
-                                  className="w-10 h-10 object-contain"
-                                />
-                                {(cellState.multiplierBadge || isCoinMode) && (
-                                  <span className="absolute -bottom-1 px-1.5 py-0.2 rounded-full bg-gradient-to-r from-amber-400 to-orange-500 text-slate-950 font-mono text-[8px] font-black shadow">
-                                    {isCoinMode ? jackpotBadge : cellState.multiplierBadge}
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      );
-                    })}
-
-                    {/* Multiplier Projectile Beam flying from center orb to Top Total-Win Plaque */}
-                    {activeStage === "reel_tumble_cascade" && tumbleFrame.multiplierBeam && (
-                      <div
-                        style={{
-                          bottom: `${35 + tumbleFrame.multiplierBeam.progress * 65}%`,
-                          left: "50%",
-                          transform: "translate(-50%, 50%)",
-                        }}
-                        className="absolute z-20 px-2.5 py-1 rounded-full bg-cyan-300 text-slate-950 font-mono text-xs font-black shadow-[0_0_24px_#38bdf8] pointer-events-none"
-                      >
-                        ⚡ {tumbleFrame.multiplierBeam.label}
-                      </div>
-                    )}
-
-                    {/* 1×3 Full-Reel Expanding Wild Unfurl on Center Reel 3 */}
-                    {activeStage === "expanding_wild_reel" && (
-                      <div
-                        style={{
-                          transform: `scaleY(${Math.min(1, 0.35 + normProgress * 0.95)})`,
-                          transformOrigin: "50% 50%",
-                        }}
-                        className="absolute inset-y-2 left-[40.5%] w-[19%] z-20 rounded-xl bg-gradient-to-b from-amber-400/90 via-sky-500/85 to-purple-600/90 border-2 border-amber-200 shadow-[0_0_32px_rgba(250,204,21,0.75)] flex flex-col items-center justify-between p-1.5 pointer-events-none"
-                      >
-                        <span className="text-[9px] font-black uppercase text-slate-950 bg-amber-200 px-1.5 rounded-full">
-                          WILD
-                        </span>
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={project.src}
-                          alt="Expanding Wild Hero"
-                          className="h-28 object-contain drop-shadow"
-                        />
-                        <span className="text-[11px] font-mono font-black text-white bg-slate-950/80 px-2 py-0.5 rounded-full border border-amber-300">
-                          {Math.min(100, Math.max(2, Math.round(normProgress * 100)))}×
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            );
-          })()}
-        </div>
-      )}
     </div>
   );
 }

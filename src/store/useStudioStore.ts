@@ -5,7 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { bakeClipConstraintsToKeyframes, sampleDeformTrack } from "@/core/animator";
 import { applyPose, breakdownKey, patchKeyAt, retimeClip, samplePose, snapTime, upsertKey } from "@/core/keyframes";
 import type { BonePose } from "@/core/solver";
-import { buildSymbolRigProject, getThemeSymbols, type SlotSymbolRole } from "@/core/batch-symbols-and-slot-stage";
+import { buildSymbolRigProject, getThemeSymbols, type SlotSymbolRole } from "@/core/batch-symbols";
 import {
   applyVoiceLipSyncToClip,
   DEFAULT_PARALLAX_CONFIG,
@@ -30,11 +30,6 @@ import {
   type SpineForgeProject,
   type TransformKey,
 } from "@/core/schema";
-import {
-  BIG_WIN_LADDER,
-  type SlotOrientationMode,
-  type SlotSuiteStageMode,
-} from "@/core/slot-animation-suite";
 import type { ElementalVfxType } from "@/core/vfx-colliders-profiler";
 import {
   buildPartMesh,
@@ -44,6 +39,8 @@ import {
   type FfdLiquifyMode,
   type WeightBrushMode,
 } from "@/core/weights";
+import { computeViewMetrics, VIEW_ZOOM_MAX, VIEW_ZOOM_MIN } from "@/core/webgl-renderer";
+import { usePreferencesStore } from "@/store/usePreferencesStore";
 
 /** Sub-tool of the Pose mode, matching Spine's B / C / V / X tools. */
 export type TransformTool = "pose" | "rotate" | "translate" | "scale";
@@ -85,8 +82,7 @@ type OverlayToggleKey =
   | "showMotionArcs"
   | "showSlashTrail"
   | "enable3DRelight"
-  | "showHitboxes"
-  | "showSlotStage";
+  | "showHitboxes";
 
 type StudioState = {
   project: SpineForgeProject;
@@ -113,12 +109,17 @@ type StudioState = {
   lightAngleDeg: number;
   lightIntensity: number;
   showHitboxes: boolean;
-  showSlotStage: boolean;
-  slotStageMode: SlotSuiteStageMode;
-  slotOrientation: SlotOrientationMode;
   parallax: ParallaxLookAtConfig;
   activeVfx: ElementalVfxType;
   mobileProfileScale: 1 | 0.5;
+
+  /** Viewport camera: multiplier on fit-to-window scale (1 = fit). Session-only. */
+  viewZoom: number;
+  viewPanX: number;
+  viewPanY: number;
+  /** Last overlay canvas size in device pixels (for keyboard zoom toward center). */
+  viewCanvasW: number;
+  viewCanvasH: number;
 
   // Weight & Liquify brush state
   brushMode: WeightBrushMode;
@@ -181,8 +182,11 @@ type StudioState = {
   applyVoiceLipSync: (phraseId: string) => void;
   setActiveVfx: (vfx: ElementalVfxType) => void;
   setMobileProfileScale: (scale: 1 | 0.5) => void;
-  setSlotStageMode: (stageMode: SlotSuiteStageMode) => void;
-  setSlotOrientation: (orientation: SlotOrientationMode) => void;
+  setViewPan: (panX: number, panY: number) => void;
+  setViewCanvasSize: (w: number, h: number) => void;
+  resetView: () => void;
+  /** Zoom by `factor` around an anchor in canvas pixels (defaults to view center). */
+  zoomAt: (factor: number, anchorCanvasX?: number, anchorCanvasY?: number, canvasW?: number, canvasH?: number) => void;
   /** Replaces the document without asking. UI code calls requestDocument instead. */
   loadSymbolRig: (role: SlotSymbolRole) => void;
   updateBone: (boneName: string, patch: Partial<RigBone>) => void;
@@ -214,6 +218,14 @@ type StudioState = {
   poseClipboard: Record<string, BonePose> | null;
   copyPose: () => void;
   pastePose: () => void;
+  /** Named pose bookmarks (A–D style); max 8. */
+  poseBookmarks: { id: string; label: string; pose: Record<string, BonePose> }[];
+  savePoseBookmark: (label?: string) => void;
+  recallPoseBookmark: (id: string) => void;
+  clearPoseBookmarks: () => void;
+  /** Preview: freeze IK end-effector while adjusting parents. */
+  lockIkEndEffector: boolean;
+  setLockIkEndEffector: (v: boolean) => void;
   /** Keys every bone (or just `bones`) at the playhead, `fraction` of the way between neighbouring keys. */
   insertBreakdown: (fraction: number, bones?: string[]) => void;
   setClipTiming: (patch: { duration?: number; fps?: number; loop?: boolean; stretch?: boolean }) => void;
@@ -281,12 +293,15 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   lightAngleDeg: -38,
   lightIntensity: 0.55,
   showHitboxes: false,
-  showSlotStage: false,
-  slotStageMode: "off",
-  slotOrientation: "landscape_16_9",
   parallax: { ...DEFAULT_PARALLAX_CONFIG },
   activeVfx: "lightning_bolts",
   mobileProfileScale: 1,
+
+  viewZoom: 1,
+  viewPanX: 0,
+  viewPanY: 0,
+  viewCanvasW: 0,
+  viewCanvasH: 0,
 
   brushMode: "add",
   liquifyMode: "push",
@@ -377,9 +392,13 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       hiddenParts: [],
       lockedBones: [],
       poseClipboard: null,
+      poseBookmarks: [],
       physicsReport: report,
       history: [makeSnapshot(historyLabel, project)],
       historyIndex: 0,
+      viewZoom: 1,
+      viewPanX: 0,
+      viewPanY: 0,
     });
   },
 
@@ -442,10 +461,11 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   runOneClickAutoRig: () => {
     const state = get();
+    const meshDensity = usePreferencesStore.getState().meshDensityDefault;
     const { project: autoShipped, physicsReport } = runFullAutoModePipeline(state.project, {
       archetype: state.autoArchetype,
       principles: state.principles,
-      meshDensity: "high",
+      meshDensity,
     });
     set({ physicsReport });
     state.pushHistory("1-Click Auto-Rig & Physics", autoShipped);
@@ -454,10 +474,11 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   runAutoModeSelectAction: (actionId, archetype) => {
     const state = get();
     const nextArch = archetype ?? state.autoArchetype;
+    const meshDensity = usePreferencesStore.getState().meshDensityDefault;
     const { project: autoShipped, physicsReport } = runFullAutoModePipeline(state.project, {
       archetype: nextArch,
       principles: state.principles,
-      meshDensity: "high",
+      meshDensity,
     });
     set({
       autoArchetype: nextArch,
@@ -504,62 +525,37 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   setActiveVfx: (activeVfx) => set({ activeVfx }),
   setMobileProfileScale: (mobileProfileScale) => set({ mobileProfileScale }),
 
-  setSlotStageMode: (slotStageMode) => {
-    if (slotStageMode === "off") {
-      set({ slotStageMode: "off", showSlotStage: false });
+  setViewPan: (viewPanX, viewPanY) => set({ viewPanX, viewPanY }),
+  setViewCanvasSize: (w, h) => {
+    const s = get();
+    if (s.viewCanvasW === w && s.viewCanvasH === h) return;
+    set({ viewCanvasW: w, viewCanvasH: h });
+  },
+  resetView: () => set({ viewZoom: 1, viewPanX: 0, viewPanY: 0 }),
+  zoomAt: (factor, anchorCanvasX, anchorCanvasY, canvasW, canvasH) => {
+    const s = get();
+    const w = canvasW ?? s.viewCanvasW;
+    const h = canvasH ?? s.viewCanvasH;
+    const nextZoom = Math.min(VIEW_ZOOM_MAX, Math.max(VIEW_ZOOM_MIN, s.viewZoom * factor));
+    const actual = nextZoom / s.viewZoom;
+    if (!(actual > 0) || Math.abs(actual - 1) < 1e-9) return;
+    if (w > 0 && h > 0) {
+      const ax = anchorCanvasX ?? w / 2;
+      const ay = anchorCanvasY ?? h / 2;
+      const { offsetX, offsetY } = computeViewMetrics(s.project, w, h, {
+        zoom: s.viewZoom,
+        panX: s.viewPanX,
+        panY: s.viewPanY,
+      });
+      set({
+        viewZoom: nextZoom,
+        viewPanX: s.viewPanX + (1 - actual) * (ax - offsetX),
+        viewPanY: s.viewPanY + (1 - actual) * (ay - offsetY),
+      });
       return;
     }
-    if (slotStageMode === "big_win_ladder") {
-      const topTier = BIG_WIN_LADDER[3]!;
-      set({
-        slotStageMode,
-        showSlotStage: true,
-        activeClip: topTier.heroClip,
-        activeVfx: topTier.vfx,
-        activeSkinName: topTier.skinName,
-        currentTime: 0,
-        isPlaying: true,
-      });
-    } else if (slotStageMode === "scatter_anticipation") {
-      set({
-        slotStageMode,
-        showSlotStage: true,
-        activeClip: "anticipation",
-        activeVfx: "lightning_bolts",
-        currentTime: 0,
-        isPlaying: true,
-      });
-    } else if (slotStageMode === "reel_tumble_cascade") {
-      set({
-        slotStageMode,
-        showSlotStage: true,
-        activeClip: "zeus-bolt",
-        activeVfx: "shockwave_rings",
-        currentTime: 0,
-        isPlaying: true,
-      });
-    } else if (slotStageMode === "hold_and_spin_coins") {
-      set({
-        slotStageMode,
-        showSlotStage: true,
-        activeClip: "chest-open",
-        activeVfx: "coin_fountain",
-        currentTime: 0,
-        isPlaying: true,
-      });
-    } else {
-      set({
-        slotStageMode,
-        showSlotStage: true,
-        activeClip: "power",
-        activeVfx: "star_sparks",
-        currentTime: 0,
-        isPlaying: true,
-      });
-    }
+    set({ viewZoom: nextZoom });
   },
-
-  setSlotOrientation: (slotOrientation) => set({ slotOrientation }),
 
   loadSymbolRig: (role) => {
     const state = get();
@@ -825,6 +821,8 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   },
 
   poseClipboard: null,
+  poseBookmarks: [],
+  lockIkEndEffector: false,
 
   copyPose: () => {
     const state = get();
@@ -840,6 +838,37 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     const t = Number(state.currentTime.toFixed(4));
     state.editActiveClip((clip) => ({ ...clip, boneTracks: applyPose(clip.boneTracks, pose, t) }), `Pasted Pose @ ${t.toFixed(2)}s`);
   },
+
+  savePoseBookmark: (label) => {
+    const state = get();
+    const clip = state.project.animations[state.activeClip];
+    if (!clip) return;
+    const pose = samplePose(
+      clip,
+      state.project.bones.map((b) => b.name),
+      state.currentTime,
+    );
+    const labels = ["A", "B", "C", "D", "E", "F", "G", "H"];
+    const nextLabel = label?.trim() || labels[state.poseBookmarks.length % labels.length]!;
+    const id = `bm-${Date.now().toString(36)}`;
+    const poseBookmarks = [...state.poseBookmarks, { id, label: nextLabel, pose }].slice(-8);
+    set({ poseBookmarks });
+  },
+
+  recallPoseBookmark: (id) => {
+    const state = get();
+    const bm = state.poseBookmarks.find((b) => b.id === id);
+    if (!bm) return;
+    const t = Number(state.currentTime.toFixed(4));
+    state.editActiveClip(
+      (clip) => ({ ...clip, boneTracks: applyPose(clip.boneTracks, bm.pose, t) }),
+      `Recalled pose ${bm.label} @ ${t.toFixed(2)}s`,
+    );
+  },
+
+  clearPoseBookmarks: () => set({ poseBookmarks: [] }),
+
+  setLockIkEndEffector: (lockIkEndEffector) => set({ lockIkEndEffector }),
 
   insertBreakdown: (fraction, bones) => {
     const state = get();

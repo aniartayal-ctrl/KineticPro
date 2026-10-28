@@ -72,7 +72,7 @@ await step("tools", async () => {
 });
 
 await step("overlays", async () => {
-  const labels = ["Bones", "Mesh Wireframe", "Weight Heatmap", "Solo Selected Layer", "Onion Skin", "Motion Arcs", "Weapon Trail", "Slot Reels", "Hitboxes", "Normal-Map Lighting"];
+  const labels = ["Bones", "Mesh Wireframe", "Weight Heatmap", "IK Capsules", "Solo Selected Layer", "Onion Skin", "Motion Arcs", "Weapon Trail", "Hitboxes", "Normal-Map Lighting"];
   await click(page.getByRole("button", { name: "Viewport overlays" })); // the menu stays open while toggling
   for (const label of labels) {
     for (let i = 0; i < 2; i++) {

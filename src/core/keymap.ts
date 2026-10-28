@@ -30,6 +30,7 @@ export type CommandId =
   | "key.selection"
   | "key.activeTransform"
   | "key.everything"
+  | "key.breakdown"
   | "play.forward"
   | "play.backward"
   | "play.toggle"
@@ -43,6 +44,7 @@ export type CommandId =
   | "time.prev10"
   | "clip.toggleLoop"
   | "layer.toggleVisibility"
+  | "layer.solo"
   | "drawOrder.up"
   | "drawOrder.down"
   | "drawOrder.up5"
@@ -60,9 +62,13 @@ export type CommandId =
   | "panel.graph"
   | "panel.hideAll"
   | "panel.help"
-  | "ui.instantTooltips";
+  | "panel.preferences"
+  | "ui.instantTooltips"
+  | "view.zoomIn"
+  | "view.zoomOut"
+  | "view.reset";
 
-export type KeyGroup = "Tools" | "Keying" | "Playback" | "Layers" | "Edit" | "File" | "Panels";
+export type KeyGroup = "Tools" | "Keying" | "Playback" | "Layers" | "Edit" | "File" | "Panels" | "View";
 
 export type Command = {
   id: CommandId;
@@ -114,6 +120,7 @@ export const COMMANDS: Command[] = [
     note: "Kinetic keys a bone's channels together, so this matches K",
   },
   { id: "key.everything", label: "Key every bone", group: "Keying", keys: ["Mod+Shift+L"], spine: true },
+  { id: "key.breakdown", label: "Insert breakdown at playhead", group: "Keying", keys: ["Comma"] },
 
   // Playback: Spine defaults
   { id: "play.forward", label: "Play forward / stop", group: "Playback", keys: ["D"], spine: true },
@@ -132,6 +139,7 @@ export const COMMANDS: Command[] = [
 
   // Layers: Spine defaults
   { id: "layer.toggleVisibility", label: "Hide / show selected layer", group: "Layers", keys: ["H"], spine: true },
+  { id: "layer.solo", label: "Solo selected layer", group: "Layers", keys: ["Shift+H"], note: "Isolates the selected part on the canvas" },
   { id: "drawOrder.up", label: "Draw order up", group: "Layers", keys: ["Equal", "NumpadAdd"], spine: true },
   { id: "drawOrder.down", label: "Draw order down", group: "Layers", keys: ["Minus", "NumpadSubtract"], spine: true },
   { id: "drawOrder.up5", label: "Draw order up 5", group: "Layers", keys: ["Shift+Equal", "Shift+NumpadAdd"], spine: true },
@@ -155,7 +163,13 @@ export const COMMANDS: Command[] = [
   { id: "panel.graph", label: "Graph editor", group: "Panels", keys: ["G"] },
   { id: "panel.hideAll", label: "Hide all panels", group: "Panels", keys: ["Tab"] },
   { id: "panel.help", label: "Help and shortcuts", group: "Panels", keys: ["?", "Slash"] },
+  { id: "panel.preferences", label: "Preferences", group: "Panels", keys: ["Mod+Comma"] },
   { id: "ui.instantTooltips", label: "Instant tooltips", group: "Panels", keys: ["F1"], spine: true },
+
+  // View: Kinetic (Spine uses scroll for zoom; =/− stay draw order)
+  { id: "view.zoomIn", label: "Zoom in", group: "View", keys: ["Mod+Equal", "Mod+NumpadAdd"], note: "Scroll / pinch also zooms toward the cursor" },
+  { id: "view.zoomOut", label: "Zoom out", group: "View", keys: ["Mod+Minus", "Mod+NumpadSubtract"] },
+  { id: "view.reset", label: "Reset view (fit)", group: "View", keys: ["Mod+0"] },
 ];
 
 /** Spine defaults Kinetic does not have; pressing one explains why instead of doing nothing. */
@@ -175,6 +189,9 @@ export const MOUSE_GESTURES: { gesture: string; action: string; spine: boolean }
   { gesture: "Double-click key", action: "Delete key", spine: true },
   { gesture: "⇧ drag playhead", action: "Scrub without snapping", spine: true },
   { gesture: "Right-click canvas", action: "Previous tool", spine: true },
+  { gesture: "Scroll / pinch canvas", action: "Zoom toward cursor", spine: true },
+  { gesture: "⌥ scroll canvas", action: "Step ±1 frame", spine: false },
+  { gesture: "Middle-drag canvas", action: "Pan view", spine: true },
   { gesture: "⌘ drag key (graph)", action: "Lock to time or value", spine: false },
 ];
 
@@ -204,9 +221,54 @@ export function eventMatches(e: KeyLike, combo: string): boolean {
   return e.key === c.key;
 }
 
-export function commandForEvent(e: KeyLike): CommandId | null {
-  for (const cmd of COMMANDS) if (cmd.keys.some((k) => eventMatches(e, k))) return cmd.id;
+export type ShortcutOverrides = Partial<Record<CommandId, string[]>>;
+
+/** Commands with user overrides applied (Preferences → Shortcuts). */
+export function resolveCommands(overrides: ShortcutOverrides = {}): Command[] {
+  if (!overrides || Object.keys(overrides).length === 0) return COMMANDS;
+  return COMMANDS.map((c) => {
+    const keys = overrides[c.id];
+    return keys && keys.length > 0 ? { ...c, keys } : c;
+  });
+}
+
+export function commandForEvent(e: KeyLike, overrides: ShortcutOverrides = {}): CommandId | null {
+  for (const cmd of resolveCommands(overrides)) if (cmd.keys.some((k) => eventMatches(e, k))) return cmd.id;
   return null;
+}
+
+/** Find another command that already uses this combo (for conflict UI). */
+export function findShortcutConflict(
+  combo: string,
+  except: CommandId,
+  overrides: ShortcutOverrides = {},
+): CommandId | null {
+  for (const cmd of resolveCommands(overrides)) {
+    if (cmd.id === except) continue;
+    if (cmd.keys.some((k) => k.toLowerCase() === combo.toLowerCase())) return cmd.id;
+  }
+  return null;
+}
+
+/** Build a combo string from a keyboard event (for shortcut recording). */
+export function comboFromEvent(e: KeyLike): string | null {
+  const key = e.key;
+  if (["Control", "Meta", "Alt", "Shift"].includes(key)) return null;
+  const parts: string[] = [];
+  if (e.ctrlKey || e.metaKey) parts.push("Mod");
+  if (e.altKey) parts.push("Alt");
+  if (e.shiftKey && key.length !== 1 && key !== "?") parts.push("Shift");
+  let token = key;
+  if (key === " ") token = "Space";
+  else if (e.code === "Comma") token = "Comma";
+  else if (e.code === "Equal") token = "Equal";
+  else if (e.code === "Minus") token = "Minus";
+  else if (e.code === "BracketLeft") token = "BracketLeft";
+  else if (e.code === "BracketRight") token = "BracketRight";
+  else if (e.code === "Slash") token = "Slash";
+  else if (key.length === 1) token = key.toUpperCase();
+  parts.push(token);
+  return parts.join("+");
 }
 
 export function unsupportedHint(e: KeyLike): string | null {
@@ -225,6 +287,8 @@ const KEY_GLYPHS: Record<string, string> = {
   BracketLeft: "[",
   BracketRight: "]",
   Slash: "/",
+  Comma: ",",
+  Period: ".",
   Escape: "Esc",
 };
 
@@ -240,7 +304,7 @@ export function isMacPlatform(): boolean {
 }
 
 /** First binding of a command, formatted for tooltips. */
-export function shortcutLabel(id: CommandId, mac = isMacPlatform()): string {
-  const cmd = COMMANDS.find((c) => c.id === id);
+export function shortcutLabel(id: CommandId, mac = isMacPlatform(), overrides: ShortcutOverrides = {}): string {
+  const cmd = resolveCommands(overrides).find((c) => c.id === id);
   return cmd ? formatCombo(cmd.keys[0]!, mac) : "";
 }

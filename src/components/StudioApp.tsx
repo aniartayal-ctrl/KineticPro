@@ -1,22 +1,34 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { reviewClip } from "@/core/coach";
 import { sampleTransformTrack } from "@/core/animator";
 import { keyPreservingShape, patchKeyAt, snapTime } from "@/core/keyframes";
+import { fileFromBase64, importCharacterFile, isImportableImageName } from "@/core/import-character";
 import { commandForEvent, isMacPlatform, shortcutLabel, unsupportedHint, type CommandId } from "@/core/keymap";
+import { VIEW_ZOOM_STEP } from "@/core/webgl-renderer";
 import type { SpineForgeProject } from "@/core/schema";
 import { RIG_BONE_PALETTE } from "@/core/schema";
 import { buildBrowserUnityExportBundle } from "@/exporters/browser-bundle-builder";
+import { usePreferencesStore } from "@/store/usePreferencesStore";
 import { useStudioNoTime, useStudioStore, type StudioMode, type TransformTool } from "@/store/useStudioStore";
 import { AiAgentPanel } from "./AiAgentPanel";
 import { BudgetPanel } from "./BudgetPanel";
+import { DockDropZones, FloatingPanel } from "./FloatingPanel";
 import { PanelBoundary } from "./PanelBoundary";
+import { PreferencesModal } from "./PreferencesModal";
 import { BUILTIN_PROJECTS, fetchSavedProjects, ProjectsMenu, UnsavedChangesDialog, type OpenTarget } from "./ProjectsMenu";
 import { LeftToolOptionsPane, type ExportBundlePreviewData } from "./LeftToolOptionsPane";
 import { StudioViewport } from "./StudioViewport";
 import { TimelinePanel, type TimelineView } from "./TimelinePanel";
+import { UnityPreviewModal } from "./UnityPreviewModal";
 import { UserManualModal } from "./UserManualModal";
+import {
+  WORKSPACE_PRESETS,
+  type PanelId,
+  type WorkspacePreset,
+} from "@/store/usePreferencesStore";
+
 
 /* ── Icons (SF Symbols-style line icons, 1.75 stroke on a 24 grid) ─────────────────────────── */
 
@@ -116,6 +128,12 @@ const ICON_PATHS: Record<string, ReactNode> = {
     <>
       <circle cx="12" cy="12" r="10" />
       <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01" />
+    </>
+  ),
+  settings: (
+    <>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4" />
     </>
   ),
   play: <path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5Z" fill="currentColor" stroke="none" />,
@@ -233,36 +251,38 @@ type OverlayKey =
   | "showSlashTrail"
   | "enable3DRelight"
   | "showHitboxes"
-  | "showSlotStage"
+  | "showCapsules"
   | "isolatePart";
 
-const VIEW_GROUPS: { title: string; items: { key: OverlayKey; label: string }[] }[] = [
+const VIEW_GROUPS: { title: string; items: { key: OverlayKey; label: string; chip: string }[] }[] = [
   {
     title: "Rig",
     items: [
-      { key: "showBones", label: "Bones" },
-      { key: "showMeshWireframe", label: "Mesh Wireframe" },
-      { key: "showHeatmap", label: "Weight Heatmap" },
-      { key: "isolatePart", label: "Solo Selected Layer" },
+      { key: "showBones", label: "Bones", chip: "Bones" },
+      { key: "showMeshWireframe", label: "Mesh Wireframe", chip: "Mesh" },
+      { key: "showHeatmap", label: "Weight Heatmap", chip: "Heat" },
+      { key: "showCapsules", label: "IK Capsules", chip: "Capsules" },
+      { key: "isolatePart", label: "Solo Selected Layer", chip: "Solo" },
     ],
   },
   {
     title: "Motion",
     items: [
-      { key: "showOnionSkin", label: "Onion Skin" },
-      { key: "showMotionArcs", label: "Motion Arcs" },
-      { key: "showSlashTrail", label: "Weapon Trail" },
+      { key: "showOnionSkin", label: "Onion Skin", chip: "Onion" },
+      { key: "showMotionArcs", label: "Motion Arcs", chip: "Arcs" },
+      { key: "showSlashTrail", label: "Weapon Trail", chip: "Trail" },
     ],
   },
   {
     title: "Stage",
     items: [
-      { key: "showSlotStage", label: "Slot Reels" },
-      { key: "showHitboxes", label: "Hitboxes" },
-      { key: "enable3DRelight", label: "Normal-Map Lighting" },
+      { key: "showHitboxes", label: "Hitboxes", chip: "Hitboxes" },
+      { key: "enable3DRelight", label: "Normal-Map Lighting", chip: "Lit" },
     ],
   },
 ];
+
+const OVERLAY_CHIPS = VIEW_GROUPS.flatMap((g) => g.items);
 
 /* ── Small building blocks ─────────────────────────────────────────────────────────────────── */
 
@@ -390,16 +410,53 @@ export function StudioApp() {
     chooseTool,
   } = store;
 
-  // Layout state. Copilot starts closed: the canvas is the content, panels are opt-in.
-  const [leftPaneOpen, setLeftPaneOpen] = useState(true);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
-  const [showAiCopilot, setShowAiCopilot] = useState(false);
+  // Layout from Preferences (persisted). Copilot starts closed: the canvas is the content.
+  const leftPaneOpen = usePreferencesStore((s) => s.leftOpen);
+  const setLeftPaneOpen = usePreferencesStore((s) => s.setLeftOpen);
+  const inspectorOpen = usePreferencesStore((s) => s.inspectorOpen);
+  const setInspectorOpen = usePreferencesStore((s) => s.setInspectorOpen);
+  const showAiCopilot = usePreferencesStore((s) => s.copilotOpen);
+  const setShowAiCopilot = usePreferencesStore((s) => s.setCopilotOpen);
+  const leftWidth = usePreferencesStore((s) => s.leftWidth);
+  const setLeftWidth = usePreferencesStore((s) => s.setLeftWidth);
+  const inspectorWidth = usePreferencesStore((s) => s.inspectorWidth);
+  const setInspectorWidth = usePreferencesStore((s) => s.setInspectorWidth);
+  const timelinePosition = usePreferencesStore((s) => s.timelinePosition);
+  const setTimelinePosition = usePreferencesStore((s) => s.setTimelinePosition);
+  const dopeSheetExpanded = usePreferencesStore((s) => s.dopeExpanded);
+  const setDopeSheetExpanded = usePreferencesStore((s) => s.setDopeExpanded);
+  const timelineHeight = usePreferencesStore((s) => s.timelineHeight);
+  const shortcutOverrides = usePreferencesStore((s) => s.shortcutOverrides);
+  const openPreferences = usePreferencesStore((s) => s.openPreferences);
+  const hydratePreferences = usePreferencesStore((s) => s.hydrate);
+  const panelMode = usePreferencesStore((s) => s.panelMode);
+  const floatRects = usePreferencesStore((s) => s.floatRects);
+  const setFloatRect = usePreferencesStore((s) => s.setFloatRect);
+  const undockPanel = usePreferencesStore((s) => s.undockPanel);
+  const dockPanel = usePreferencesStore((s) => s.dockPanel);
+  const workspacePreset = usePreferencesStore((s) => s.workspacePreset);
+  const applyWorkspacePreset = usePreferencesStore((s) => s.applyWorkspacePreset);
+  const onionSkinDepth = usePreferencesStore((s) => s.onionSkinDepth);
+  const setOnionSkinDepth = usePreferencesStore((s) => s.setOnionSkinDepth);
+  const onionSkinOpacity = usePreferencesStore((s) => s.onionSkinOpacity);
+  const setOnionSkinOpacity = usePreferencesStore((s) => s.setOnionSkinOpacity);
+  const poseBookmarks = useStudioStore((s) => s.poseBookmarks);
+  const lockIkEndEffector = useStudioStore((s) => s.lockIkEndEffector);
+  const [dockDrag, setDockDrag] = useState<{ active: boolean; over: "left" | "right" | "copilot" | null }>({
+    active: false,
+    over: null,
+  });
+  const [unityPreviewOpen, setUnityPreviewOpen] = useState(false);
+
+  useEffect(() => {
+    hydratePreferences();
+  }, [hydratePreferences]);
+
   // In narrow windows the copilot and the left pane would overlap; opening the copilot tucks the pane away.
   useEffect(() => {
     if (showAiCopilot && window.innerWidth < 1100) setLeftPaneOpen(false);
-  }, [showAiCopilot]);
+  }, [showAiCopilot, setLeftPaneOpen]);
   const [inspectorTab, setInspectorTab] = useState<"layers" | "bones" | "history" | "budget">("layers");
-  const [dopeSheetExpanded, setDopeSheetExpanded] = useState(false);
   const [timelineView, setTimelineView] = useState<TimelineView>("keys");
   const [eventType, setEventType] = useState("OnHit");
   const [newBoneName, setNewBoneName] = useState("");
@@ -422,6 +479,8 @@ export function StudioApp() {
   const [pendingOpen, setPendingOpen] = useState<OpenTarget | null>(null);
   const [pendingError, setPendingError] = useState<string | null>(null);
   const [pendingBusy, setPendingBusy] = useState(false);
+  const [dropActive, setDropActive] = useState(false);
+  const [dropBusy, setDropBusy] = useState(false);
   const projectsMenu = usePopover();
 
   const viewMenu = usePopover();
@@ -445,6 +504,16 @@ export function StudioApp() {
       setAutosavedAt(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
     } catch {
       setSaveState({ label: "Autosave failed: browser storage full", tone: "local" });
+    }
+    // Disk autosave when this project has been saved at least once (savedRef tracks last save).
+    if (savedRef.current && savedRef.current.id === current.id) {
+      void fetch(`/api/projects/${encodeURIComponent(current.id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: current }),
+      }).catch(() => {
+        /* offline / server down — localStorage still holds the copy */
+      });
     }
   };
 
@@ -512,6 +581,7 @@ export function StudioApp() {
         return false;
       }
       markSaved(current);
+      usePreferencesStore.getState().pushRecentProject(current.id, current.title);
       setSaveState({ label: `Saved ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`, tone: "ok" });
       return true;
     } catch {
@@ -546,6 +616,9 @@ export function StudioApp() {
     markSaved(opened);
     lastAutosaved.current = opened;
     setExportData(null); // the export preview belonged to the previous project
+    if (target.kind === "saved" || target.kind === "preset") {
+      usePreferencesStore.getState().pushRecentProject(opened.id, opened.title);
+    }
     setSaveState({ label: target.kind === "saved" ? "Opened from projects" : "Built-in template", tone: "ok" });
   };
 
@@ -626,6 +699,33 @@ export function StudioApp() {
     }
   };
 
+  /** Respects Preferences → Export default (Unity ZIP / WebM / both). */
+  const handleExportAction = async () => {
+    const pref = usePreferencesStore.getState().exportDefault;
+    if (pref === "webm") {
+      setMode("export");
+      setLeftPaneOpen(true);
+      await handleExportTransparentWebM();
+      return;
+    }
+    await handleRunExport();
+    if (pref === "both") await handleExportTransparentWebM();
+  };
+
+  const applyPreset = (id: Exclude<WorkspacePreset, "custom">) => {
+    const studioMode = applyWorkspacePreset(id);
+    setMode(studioMode);
+    if (id === "export") {
+      setInspectorTab("budget");
+      void handleRunExport();
+    }
+  };
+
+  const onFloatDragZones = (active: boolean, over: "left" | "right" | "copilot" | null, panelId: PanelId) => {
+    setDockDrag({ active, over });
+    if (!active && over) dockPanel(panelId);
+  };
+
   // Clicking the active tool again hides its options; keyboard selection never changes the panels.
   const handleSelectTool = (tool: ToolDef, fromKeyboard = false) => {
     if (tool.id === "auto") runOneClickAutoRig();
@@ -651,7 +751,7 @@ export function StudioApp() {
     setHint({ text, id });
     window.setTimeout(() => setHint((h) => (h?.id === id ? null : h)), 2400);
   };
-  const tip = (label: string, id: CommandId) => `${label}  ${shortcutLabel(id, mac)}`;
+  const tip = (label: string, id: CommandId) => `${label}  ${shortcutLabel(id, mac, shortcutOverrides)}`;
 
   /** Keys the given bones at the playhead's frame without changing their motion. */
   const keyBones = (bones: string[]) => {
@@ -699,7 +799,7 @@ export function StudioApp() {
     s.editActiveClip((c) => ({ ...c, boneTracks: { ...c.boneTracks, [bone]: patchKeyAt(c.boneTracks[bone] ?? [], t, patch) } }), `Nudged ${bone}`);
   };
 
-  const runCommand = (cmd: CommandId, e: KeyboardEvent) => {
+  const runCommand = (cmd: CommandId, e?: Pick<KeyboardEvent, "shiftKey">) => {
     const s = useStudioStore.getState();
     const clip = s.project.animations[s.activeClip];
     const fps = clip?.fps || 30;
@@ -722,18 +822,21 @@ export function StudioApp() {
       case "brush.larger":
         return s.setBrushRadius(Math.min(180, s.brushRadius + 10));
       case "nudge.left":
-        return nudge(-1, 0, e.shiftKey);
+        return nudge(-1, 0, e?.shiftKey ?? false);
       case "nudge.right":
-        return nudge(1, 0, e.shiftKey);
+        return nudge(1, 0, e?.shiftKey ?? false);
       case "nudge.up":
-        return nudge(0, -1, e.shiftKey);
+        return nudge(0, -1, e?.shiftKey ?? false);
       case "nudge.down":
-        return nudge(0, 1, e.shiftKey);
+        return nudge(0, 1, e?.shiftKey ?? false);
       case "key.selection":
       case "key.activeTransform":
         return keyBones(s.selectedBone ? [s.selectedBone] : []);
       case "key.everything":
         return keyBones(s.project.bones.map((b) => b.name));
+      case "key.breakdown":
+        s.insertBreakdown(0.5, s.selectedBone ? [s.selectedBone] : undefined);
+        return showHint("Breakdown 50%");
       case "play.forward":
       case "play.backward": {
         const dir = cmd === "play.forward" ? 1 : -1;
@@ -781,12 +884,24 @@ export function StudioApp() {
       case "layer.toggleVisibility":
         if (s.selectedPart) s.togglePartVisibility(s.selectedPart);
         return;
+      case "layer.solo":
+        s.toggleOverlay("isolatePart");
+        return showHint(useStudioStore.getState().isolatePart ? "Solo on" : "Solo off");
       case "drawOrder.up":
       case "drawOrder.down":
       case "drawOrder.up5":
       case "drawOrder.down5":
         if (s.selectedPart) s.movePartLayerOrder(s.selectedPart, cmd.startsWith("drawOrder.up") ? "up" : "down", cmd.endsWith("5") ? 5 : 1);
         return;
+      case "view.zoomIn":
+        s.zoomAt(VIEW_ZOOM_STEP);
+        return showHint(`Zoom ${Math.round(useStudioStore.getState().viewZoom * 100)}%`);
+      case "view.zoomOut":
+        s.zoomAt(1 / VIEW_ZOOM_STEP);
+        return showHint(`Zoom ${Math.round(useStudioStore.getState().viewZoom * 100)}%`);
+      case "view.reset":
+        s.resetView();
+        return showHint("View fit");
       case "edit.undo":
         return s.undo();
       case "edit.redo":
@@ -801,11 +916,11 @@ export function StudioApp() {
       case "file.open":
         return projectsMenu.setOpen(true);
       case "file.export":
-        return void handleRunExport();
+        return void handleExportAction();
       case "panel.inspector":
-        return setInspectorOpen((v) => !v);
+        return setInspectorOpen(!usePreferencesStore.getState().inspectorOpen);
       case "panel.copilot":
-        return setShowAiCopilot((v) => !v);
+        return setShowAiCopilot(!usePreferencesStore.getState().copilotOpen);
       case "panel.timeline":
       case "panel.graph": {
         const view: TimelineView = cmd === "panel.graph" ? "curves" : "keys";
@@ -825,6 +940,8 @@ export function StudioApp() {
       }
       case "panel.help":
         return setShowUserManual((v) => !v);
+      case "panel.preferences":
+        return openPreferences();
       case "ui.instantTooltips": {
         const on = document.documentElement.classList.toggle("instant-tips");
         try {
@@ -838,6 +955,30 @@ export function StudioApp() {
   };
   const runCommandRef = useRef(runCommand);
   runCommandRef.current = runCommand;
+  const requestOpenRef = useRef(requestOpen);
+  requestOpenRef.current = requestOpen;
+
+  const importDroppedFile = async (file: File) => {
+    if (!isImportableImageName(file.name)) {
+      showHint("Drop a .png, .webp, .jpg, or .psd character");
+      return;
+    }
+    setDropBusy(true);
+    showHint(`Importing ${file.name}…`);
+    try {
+      const next = await importCharacterFile(file);
+      const result = await requestOpen({ kind: "imported", id: next.id, title: next.title, project: next });
+      showHint(result === "confirm" ? "Save or discard your changes to open it." : `Opened ${next.title}`);
+      setMode("animate");
+    } catch (err) {
+      showHint(err instanceof Error ? err.message : "Import failed");
+    } finally {
+      setDropBusy(false);
+      setDropActive(false);
+    }
+  };
+  const importDroppedFileRef = useRef(importDroppedFile);
+  importDroppedFileRef.current = importDroppedFile;
 
   useEffect(() => {
     setMac(isMacPlatform());
@@ -849,10 +990,12 @@ export function StudioApp() {
     const onKeyDown = (e: KeyboardEvent) => {
       shiftDownRef.current = e.shiftKey;
       if (e.defaultPrevented) return;
-      const cmd = commandForEvent(e);
+      if (usePreferencesStore.getState().preferencesOpen) return;
+      const overrides = usePreferencesStore.getState().shortcutOverrides;
+      const cmd = commandForEvent(e, overrides);
       if (isTextEntry(e.target)) {
         // While typing only document commands fire; ⌘Z, ⌘C and letters belong to the text field.
-        if (cmd === "file.save" || cmd === "file.open" || cmd === "file.export") {
+        if (cmd === "file.save" || cmd === "file.open" || cmd === "file.export" || cmd === "panel.preferences") {
           e.preventDefault();
           runCommandRef.current(cmd, e);
         }
@@ -873,11 +1016,35 @@ export function StudioApp() {
     const onKeyUp = (e: KeyboardEvent) => {
       shiftDownRef.current = e.shiftKey;
     };
+    /** Native Mac menu bar / Finder open bridge (KineticPro WKWebView shell). */
+    const onNativeCommand = (e: Event) => {
+      const id = (e as CustomEvent<{ id?: CommandId }>).detail?.id;
+      if (id) runCommandRef.current(id);
+    };
+    const onNativeImport = (e: Event) => {
+      const detail = (e as CustomEvent<{ name?: string; base64?: string; mime?: string }>).detail;
+      if (!detail?.name || !detail?.base64) return;
+      void importDroppedFileRef.current(fileFromBase64(detail.name, detail.base64, detail.mime));
+    };
+    const onNativeRecent = (e: Event) => {
+      const id = (e as CustomEvent<{ id?: string }>).detail?.id;
+      if (!id) return;
+      const recent = usePreferencesStore.getState().recentProjects.find((r) => r.id === id);
+      void requestOpenRef.current({ kind: "saved", id, title: recent?.title ?? id }).catch(() => {
+        /* open dialog handles errors */
+      });
+    };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("kinetic:command", onNativeCommand);
+    window.addEventListener("kinetic:import-file", onNativeImport);
+    window.addEventListener("kinetic:open-recent", onNativeRecent);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("kinetic:command", onNativeCommand);
+      window.removeEventListener("kinetic:import-file", onNativeImport);
+      window.removeEventListener("kinetic:open-recent", onNativeRecent);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -930,30 +1097,78 @@ export function StudioApp() {
           ? { dot: "#ff9f0a", label: autosavedAt ? `Edited · autosaved ${autosavedAt}` : "Edited" }
           : { dot: "#30d158", label: saveState.label };
 
+  const onWindowDragOver = (e: DragEvent) => {
+    if (![...e.dataTransfer.types].includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    if (!dropActive) setDropActive(true);
+  };
+  const onWindowDragLeave = (e: DragEvent) => {
+    if (e.currentTarget === e.target) setDropActive(false);
+  };
+  const onWindowDrop = (e: DragEvent) => {
+    e.preventDefault();
+    setDropActive(false);
+    const file = [...e.dataTransfer.files].find((f) => isImportableImageName(f.name));
+    if (file) void importDroppedFile(file);
+    else if (e.dataTransfer.files.length) showHint("Drop a .png, .webp, .jpg, or .psd character");
+  };
+
   return (
-    <div className="relative h-screen w-screen overflow-hidden select-none">
+    <div
+      className="relative h-screen w-screen overflow-hidden select-none"
+      onDragEnter={onWindowDragOver}
+      onDragOver={onWindowDragOver}
+      onDragLeave={onWindowDragLeave}
+      onDrop={onWindowDrop}
+    >
       {/* The canvas fills the window; every panel floats above it. */}
       <PanelBoundary name="Canvas" onError={() => autosave("error")} className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
         <StudioViewport />
       </PanelBoundary>
 
+      {(dropActive || dropBusy) && (
+        <div
+          className="fixed inset-0 z-[80] pointer-events-none flex items-center justify-center bg-[rgba(4,8,18,0.55)] backdrop-blur-[2px]"
+          aria-live="polite"
+        >
+          <div className="rounded-[16px] border border-[var(--accent)]/50 bg-[rgba(10,16,28,0.92)] px-8 py-6 text-center shadow-[0_20px_60px_rgba(0,0,0,0.45)]">
+            <div className="text-[15px] font-semibold text-[var(--label)]">
+              {dropBusy ? "Importing character…" : "Drop to import"}
+            </div>
+            <div className="mt-1 text-[12px] text-[var(--label-2)]">PNG, WebP, JPEG, or Photoshop PSD</div>
+          </div>
+        </div>
+      )}
+
       <div className="fixed inset-0 z-20 pointer-events-none flex flex-col gap-2 p-2.5">
         {/* ── Toolbar ─────────────────────────────────────────────────────────── */}
-        <header className="relative z-30 pointer-events-auto material rounded-[var(--radius-panel)] h-12 px-2 flex items-center gap-1 shrink-0">
-          <div className="flex items-center gap-1 w-[260px] shrink-0">
+        <header className="relative z-30 order-1 pointer-events-auto material rounded-[var(--radius-panel)] h-12 px-3 flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1.5 min-w-[280px] w-[min(340px,28vw)] shrink-0">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/brand/kinetic-icon-small.svg" alt="Kinetic Pro" width={28} height={28} className="ml-1 mr-2 shrink-0" draggable={false} />
+            <img
+              src="/brand/kinetic-icon.svg"
+              alt="Kinetic Pro"
+              width={32}
+              height={32}
+              className="ml-0.5 mr-1 shrink-0 rounded-[8px] shadow-[0_1px_2px_rgba(0,0,0,0.35)]"
+              draggable={false}
+            />
+            <div className="flex flex-col justify-center leading-none mr-1.5 min-w-0">
+              <span className="text-[12.5px] font-semibold tracking-tight truncate">Kinetic Pro</span>
+              <span className="text-[10px] text-[var(--label-3)] truncate">Studio</span>
+            </div>
             <button
               className="icon-btn"
               aria-pressed={leftPaneOpen}
-              onClick={() => setLeftPaneOpen((v) => !v)}
+              onClick={() => setLeftPaneOpen(!leftPaneOpen)}
               data-tip="Tool Options"
               data-tip-side="bottom"
               aria-label="Toggle tool options"
             >
               <Icon name="sidebarLeft" size={17} />
             </button>
-            <span className="w-px h-5 bg-[var(--separator-strong)] mx-1" />
+            <span className="w-px h-5 bg-[var(--separator-strong)] mx-0.5" />
             <button className="icon-btn" onClick={undo} disabled={historyIndex <= 0} data-tip={tip("Undo", "edit.undo")} data-tip-side="bottom" aria-label="Undo">
               <Icon name="undo" />
             </button>
@@ -1010,11 +1225,75 @@ export function StudioApp() {
                     return err instanceof Error ? err.message : "Could not open the project";
                   }
                 }}
+                onRestoreBackup={async (p) => {
+                  try {
+                    await requestOpen({ kind: "imported", id: p.id, title: `${p.title} (backup)`, project: p });
+                    projectsMenu.setOpen(false);
+                    return null;
+                  } catch (err) {
+                    return err instanceof Error ? err.message : "Could not restore backup";
+                  }
+                }}
               />
             )}
           </div>
 
-          <div className="flex items-center justify-end gap-1 w-[260px] shrink-0">
+          <div className="flex items-center justify-end gap-1 min-w-[280px] w-[min(720px,55vw)] shrink-0">
+            <a
+              href="https://www.linkedin.com/in/amittayal/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hidden xl:flex items-center gap-1.5 h-8 pl-2 pr-2.5 rounded-[8px] hover:bg-[var(--fill-3)] text-[var(--label-2)] hover:text-[var(--label)] transition-colors mr-0.5"
+              data-tip="Amit Tayal on LinkedIn"
+              data-tip-side="bottom"
+              aria-label="Built by Amit Tayal — LinkedIn"
+            >
+              <span className="text-[11px] whitespace-nowrap">
+                Built by <span className="font-semibold text-[var(--label)]">Amit Tayal</span>
+              </span>
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" className="shrink-0 text-[#0A66C2]">
+                <path
+                  fill="currentColor"
+                  d="M20.45 20.45h-3.56v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.35V9h3.41v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43a2.06 2.06 0 1 1 0-4.13 2.06 2.06 0 0 1 0 4.13zM7.12 20.45H3.56V9h3.56v11.45zM22.23 0H1.77C.79 0 0 .77 0 1.73v20.54C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.73V1.73C24 .77 23.2 0 22.23 0z"
+                />
+              </svg>
+            </a>
+            <div className="hidden lg:flex segmented h-8 shrink-0" role="group" aria-label="Workspace preset">
+              {(Object.keys(WORKSPACE_PRESETS) as Exclude<WorkspacePreset, "custom">[]).map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  className="px-2.5 text-[11.5px]"
+                  aria-pressed={workspacePreset === id}
+                  onClick={() => applyPreset(id)}
+                  data-tip={WORKSPACE_PRESETS[id].hint}
+                  data-tip-side="bottom"
+                >
+                  {WORKSPACE_PRESETS[id].label}
+                </button>
+              ))}
+            </div>
+            <span className="hidden md:block w-px h-5 bg-[var(--separator-strong)] mx-0.5" />
+            <div
+              className="hidden md:flex items-center gap-0.5 min-w-0 overflow-x-auto"
+              role="group"
+              aria-label="Viewport overlay chips"
+            >
+              {OVERLAY_CHIPS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className="icon-btn w-auto h-7 px-1.5 text-[10.5px] font-medium shrink-0"
+                  aria-pressed={overlayState[item.key]}
+                  onClick={() => toggleOverlay(item.key)}
+                  data-tip={item.label}
+                  data-tip-side="bottom"
+                  aria-label={item.label}
+                >
+                  {item.chip}
+                </button>
+              ))}
+            </div>
             <div className="relative" ref={viewMenu.ref}>
               <button
                 className="icon-btn w-auto px-2 gap-1.5 text-[13px]"
@@ -1023,6 +1302,7 @@ export function StudioApp() {
                 onClick={() => viewMenu.setOpen((v) => !v)}
                 data-tip="Viewport overlays"
                 data-tip-side="bottom"
+                aria-label="Viewport overlays"
               >
                 <Icon name="eye" />
                 <span className="tabular-nums text-[12px]">{activeOverlayCount}</span>
@@ -1036,6 +1316,36 @@ export function StudioApp() {
                     <div key={group.title}>
                       {gi > 0 && <div className="h-px bg-[var(--separator)] my-1 mx-2" />}
                       <div className="px-2 pt-1 pb-0.5 text-[11px] font-semibold text-[var(--label-3)]">{group.title}</div>
+                      {group.title === "Motion" && (
+                        <div className="px-2 py-1.5 space-y-1.5">
+                          <label className="flex items-center justify-between gap-2 text-[11.5px]">
+                            <span className="text-[var(--label-2)]">Onion depth</span>
+                            <select
+                              className="h-6 rounded-[6px] bg-[var(--fill-3)] border border-[var(--separator)] px-1 text-[11px]"
+                              value={onionSkinDepth}
+                              onChange={(e) => setOnionSkinDepth(Number(e.target.value) as 1 | 2 | 3)}
+                            >
+                              {[1, 2, 3].map((n) => (
+                                <option key={n} value={n}>
+                                  ±{n}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="flex items-center justify-between gap-2 text-[11.5px]">
+                            <span className="text-[var(--label-2)]">Onion opacity</span>
+                            <input
+                              type="range"
+                              min={0.05}
+                              max={0.45}
+                              step={0.01}
+                              value={onionSkinOpacity}
+                              onChange={(e) => setOnionSkinOpacity(Number(e.target.value))}
+                              className="w-20"
+                            />
+                          </label>
+                        </div>
+                      )}
                       {group.items.map((item) => (
                         <MenuRow
                           key={item.key}
@@ -1052,7 +1362,7 @@ export function StudioApp() {
             <button
               className="icon-btn relative"
               aria-pressed={showAiCopilot}
-              onClick={() => setShowAiCopilot((v) => !v)}
+              onClick={() => setShowAiCopilot(!showAiCopilot)}
               data-tip={tip("Copilot", "panel.copilot")}
               data-tip-side="bottom"
               aria-label={`Toggle AI copilot${cueCount ? `, ${cueCount} suggestions` : ""}`}
@@ -1067,7 +1377,7 @@ export function StudioApp() {
             <button
               className="icon-btn"
               aria-pressed={inspectorOpen}
-              onClick={() => setInspectorOpen((v) => !v)}
+              onClick={() => setInspectorOpen(!inspectorOpen)}
               data-tip={tip("Inspector", "panel.inspector")}
               data-tip-side="bottom"
               aria-label="Toggle inspector"
@@ -1085,10 +1395,19 @@ export function StudioApp() {
               <Icon name="help" />
             </button>
             <button
-              onClick={() => void handleRunExport()}
+              className="icon-btn"
+              onClick={() => openPreferences()}
+              data-tip={tip("Preferences", "panel.preferences")}
+              data-tip-side="bottom"
+              aria-label="Preferences"
+            >
+              <Icon name="settings" />
+            </button>
+            <button
+              onClick={() => void handleExportAction()}
               disabled={isExporting}
               className="btn-primary h-8 px-4 ml-1 text-[13px]"
-              data-tip={tip("Export bundle", "file.export")}
+              data-tip={tip("Export", "file.export")}
               data-tip-side="bottom"
             >
               {isExporting ? "Exporting…" : "Export"}
@@ -1097,7 +1416,7 @@ export function StudioApp() {
         </header>
 
         {/* ── Work area ──────────────────────────────────────────────────────── */}
-        <div className="flex-1 min-h-0 flex items-stretch gap-2">
+        <div className={`flex-1 min-h-0 flex items-stretch gap-2 ${timelinePosition === "top" ? "order-3" : "order-2"}`}>
           {/* Tool rail: grouped by workflow stage, labels on hover. */}
           <nav
             aria-label="Tools"
@@ -1123,8 +1442,16 @@ export function StudioApp() {
             ))}
           </nav>
 
-          {leftPaneOpen && (
-            <div className="flex flex-col min-h-0 animate-panel-in">
+          {leftPaneOpen && panelMode.left === "docked" && (
+            <div className="relative flex flex-col min-h-0 animate-panel-in shrink-0" style={{ width: leftWidth }}>
+              <button
+                type="button"
+                className="absolute top-2 right-3 z-20 h-6 px-2 rounded-[6px] text-[10.5px] bg-[var(--fill-2)] hover:bg-[var(--fill)] pointer-events-auto"
+                onClick={() => undockPanel("left")}
+                data-tip="Float panel"
+              >
+                Float
+              </button>
               <PanelBoundary name="Tool options" onError={() => autosave("error")}>
                 <LeftToolOptionsPane
                   onImported={async (project) =>
@@ -1132,27 +1459,66 @@ export function StudioApp() {
                       ? "Save or discard your changes to open it."
                       : "Opened and auto-rigged."
                   }
-                  onShipToUnity={handleRunExport}
+                  onShipToUnity={handleExportAction}
                   onHidePane={() => setLeftPaneOpen(false)}
                   exportData={exportData}
                   isExporting={isExporting}
                   onDownloadZip={handleDownloadZip}
                   onExportWebM={handleExportTransparentWebM}
+                  onUnityPreview={() => setUnityPreviewOpen(true)}
+                  onOpenSymbol={(role, title) => void requestOpen({ kind: "symbol", id: role as never, title })}
                 />
               </PanelBoundary>
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize tool options"
+                className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize z-10 hover:bg-[var(--accent)]/40"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  const startX = e.clientX;
+                  const startW = leftWidth;
+                  const onMove = (ev: PointerEvent) => setLeftWidth(startW + (ev.clientX - startX));
+                  const onUp = () => {
+                    window.removeEventListener("pointermove", onMove);
+                    window.removeEventListener("pointerup", onUp);
+                  };
+                  window.addEventListener("pointermove", onMove);
+                  window.addEventListener("pointerup", onUp);
+                }}
+              />
             </div>
           )}
 
           <div className="flex-1" />
 
           {/* Inspector */}
-          {inspectorOpen && (
+          {inspectorOpen && panelMode.inspector === "docked" && (
             <aside
               aria-label="Inspector"
-              className="pointer-events-auto material rounded-[var(--radius-panel)] w-[300px] flex flex-col min-h-0 shrink-0 animate-panel-in"
+              className="relative pointer-events-auto material rounded-[var(--radius-panel)] flex flex-col min-h-0 shrink-0 animate-panel-in"
+              style={{ width: inspectorWidth }}
             >
-              <div className="p-2.5 shrink-0">
-                <div className="segmented" role="tablist">
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize inspector"
+                className="absolute top-0 left-0 w-1.5 h-full cursor-col-resize z-10 hover:bg-[var(--accent)]/40"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  const startX = e.clientX;
+                  const startW = inspectorWidth;
+                  const onMove = (ev: PointerEvent) => setInspectorWidth(startW - (ev.clientX - startX));
+                  const onUp = () => {
+                    window.removeEventListener("pointermove", onMove);
+                    window.removeEventListener("pointerup", onUp);
+                  };
+                  window.addEventListener("pointermove", onMove);
+                  window.addEventListener("pointerup", onUp);
+                }}
+              />
+              <div className="p-2.5 shrink-0 flex items-center gap-1.5">
+                <div className="segmented flex-1" role="tablist">
                   {(
                     [
                       ["layers", "Layers"],
@@ -1166,6 +1532,14 @@ export function StudioApp() {
                     </button>
                   ))}
                 </div>
+                <button
+                  type="button"
+                  className="h-6 px-2 rounded-[6px] text-[10.5px] bg-[var(--fill-2)] hover:bg-[var(--fill)] shrink-0"
+                  onClick={() => undockPanel("inspector")}
+                  data-tip="Float panel"
+                >
+                  Float
+                </button>
               </div>
 
               <div className="flex-1 min-h-0 flex flex-col px-2.5 pb-2.5">
@@ -1330,11 +1704,18 @@ export function StudioApp() {
           )}
         </div>
 
-        {/* ── Transport & timeline ───────────────────────────────────────────── */}
+        {/* ── Transport & timeline (dockable top/bottom via Preferences) ──────── */}
         <footer
           className={`relative z-20 pointer-events-auto ${dopeSheetExpanded ? "material-thick" : "material"} rounded-[var(--radius-panel)] flex flex-col shrink-0 transition-[height] duration-300 ${
-            dopeSheetExpanded ? (timelineView === "curves" ? "h-[380px]" : "h-[300px]") : "h-12"
+            timelinePosition === "top" ? "order-2" : "order-3"
+          } ${
+            dopeSheetExpanded
+              ? timelineView === "curves"
+                ? "h-[380px]"
+                : `h-[${timelineHeight}px]`
+              : "h-12"
           }`}
+          style={dopeSheetExpanded && timelineView !== "curves" ? { height: timelineHeight } : undefined}
         >
           <div className="h-12 px-2 flex items-center gap-2 shrink-0">
             <button
@@ -1405,11 +1786,21 @@ export function StudioApp() {
               className="icon-btn"
               aria-pressed={dopeSheetExpanded}
               onClick={() => setDopeSheetExpanded(!dopeSheetExpanded)}
-              data-tip={`Timeline  ${shortcutLabel("panel.timeline", mac)} · Curves  ${shortcutLabel("panel.graph", mac)}`}
-              data-tip-side="top"
+              data-tip={`Timeline  ${shortcutLabel("panel.timeline", mac, shortcutOverrides)} · Curves  ${shortcutLabel("panel.graph", mac, shortcutOverrides)}`}
+              data-tip-side={timelinePosition === "top" ? "bottom" : "top"}
               aria-label="Toggle keyframe sheet"
             >
               <Icon name="keys" size={17} />
+            </button>
+
+            <button
+              className="icon-btn w-auto px-2 text-[11px] font-semibold"
+              onClick={() => setTimelinePosition(timelinePosition === "top" ? "bottom" : "top")}
+              data-tip={timelinePosition === "top" ? "Move timeline to bottom" : "Move timeline to top"}
+              data-tip-side={timelinePosition === "top" ? "bottom" : "top"}
+              aria-label="Move timeline"
+            >
+              {timelinePosition === "top" ? "↓ Dock" : "↑ Dock"}
             </button>
 
             <div className="relative" ref={transportMenu.ref}>
@@ -1419,13 +1810,18 @@ export function StudioApp() {
                 aria-haspopup="menu"
                 onClick={() => transportMenu.setOpen((v) => !v)}
                 data-tip="More"
-                data-tip-side="top"
+                data-tip-side={timelinePosition === "top" ? "bottom" : "top"}
                 aria-label="More timeline actions"
               >
                 <Icon name="more" size={17} />
               </button>
               {transportMenu.open && (
-                <div role="menu" className="absolute right-0 bottom-[calc(100%+8px)] w-64 material-thick rounded-[12px] p-1.5 animate-panel-in">
+                <div
+                  role="menu"
+                  className={`absolute right-0 w-64 material-thick rounded-[12px] p-1.5 animate-panel-in ${
+                    timelinePosition === "top" ? "top-[calc(100%+8px)]" : "bottom-[calc(100%+8px)]"
+                  }`}
+                >
                   <div className="px-2 pt-1 pb-1 text-[11px] font-semibold text-[var(--label-3)]">Add event at playhead</div>
                   <div className="flex gap-1.5 px-1 pb-1.5">
                     <select
@@ -1450,6 +1846,34 @@ export function StudioApp() {
                     </button>
                   </div>
                   <div className="h-px bg-[var(--separator)] my-1 mx-2" />
+                  <div className="px-2 pt-1 pb-1 text-[11px] font-semibold text-[var(--label-3)]">Pose bookmarks</div>
+                  <div className="flex flex-wrap gap-1 px-1 pb-1.5">
+                    <button
+                      type="button"
+                      className="h-7 px-2 rounded-[6px] text-[11px] bg-[var(--fill-2)] hover:bg-[var(--fill)]"
+                      onClick={() => {
+                        useStudioStore.getState().savePoseBookmark();
+                        showHint("Pose bookmark saved");
+                      }}
+                    >
+                      Save
+                    </button>
+                    {poseBookmarks.map((bm) => (
+                      <button
+                        key={bm.id}
+                        type="button"
+                        className="h-7 min-w-7 px-2 rounded-[6px] text-[11px] font-semibold bg-[var(--accent-soft)] hover:bg-[var(--accent)] hover:text-white"
+                        onClick={() => {
+                          useStudioStore.getState().recallPoseBookmark(bm.id);
+                          transportMenu.setOpen(false);
+                          showHint(`Recalled ${bm.label}`);
+                        }}
+                      >
+                        {bm.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="h-px bg-[var(--separator)] my-1 mx-2" />
                   <MenuRow
                     label="Bake physics into keys"
                     onClick={() => {
@@ -1457,10 +1881,35 @@ export function StudioApp() {
                       transportMenu.setOpen(false);
                     }}
                   />
+                  <MenuRow
+                    label="Lock IK end effector"
+                    checked={lockIkEndEffector}
+                    onClick={() => {
+                      useStudioStore.getState().setLockIkEndEffector(!lockIkEndEffector);
+                    }}
+                  />
                   <MenuRow label="1.5× playback" checked={playbackSpeed === 1.5} onClick={() => setPlaybackSpeed(1.5)} />
                 </div>
               )}
             </div>
+          </div>
+
+          {/* Clip library strip */}
+          <div className="px-3 pb-1.5 flex items-center gap-1.5 overflow-x-auto shrink-0">
+            <span className="text-[10.5px] font-semibold text-[var(--label-3)] shrink-0">Clips</span>
+            {Object.keys(project.animations).map((name) => (
+              <button
+                key={name}
+                type="button"
+                aria-pressed={activeClip === name}
+                onClick={() => setActiveClip(name)}
+                className={`h-7 px-2.5 rounded-[7px] text-[11.5px] whitespace-nowrap shrink-0 ${
+                  activeClip === name ? "bg-[var(--accent)] text-white font-semibold" : "bg-[var(--fill-2)] hover:bg-[var(--fill)]"
+                }`}
+              >
+                {name}
+              </button>
+            ))}
           </div>
 
           {dopeSheetExpanded && (
@@ -1471,14 +1920,40 @@ export function StudioApp() {
         </footer>
       </div>
 
-      {/* Copilot floats above the canvas (z-15) but under the toolbar menus (panel layer is z-20). */}
-      {showAiCopilot && (
+      {/* Copilot: docked overlay (default) or free-floating via Preferences. */}
+      {showAiCopilot && panelMode.copilot === "docked" && (
         <div
-          className={`fixed z-[15] ${inspectorOpen ? "right-[318px]" : "right-2.5"} ${!dopeSheetExpanded ? "bottom-[66px] h-[min(560px,calc(100vh-140px))]" : timelineView === "curves" ? "bottom-[398px] h-[min(480px,calc(100vh-470px))]" : "bottom-[318px] h-[min(520px,calc(100vh-390px))]"} w-[360px] flex flex-col animate-panel-in`}
+          className={`fixed z-[15] w-[360px] flex flex-col animate-panel-in ${
+            inspectorOpen && panelMode.inspector === "docked" ? "" : "right-2.5"
+          }`}
+          style={{
+            right: inspectorOpen && panelMode.inspector === "docked" ? inspectorWidth + 18 : undefined,
+            ...(timelinePosition === "top"
+              ? {
+                  top: dopeSheetExpanded ? (timelineView === "curves" ? 398 : timelineHeight + 66) : 66,
+                  bottom: 12,
+                }
+              : {
+                  bottom: !dopeSheetExpanded ? 66 : timelineView === "curves" ? 398 : timelineHeight + 18,
+                  height: !dopeSheetExpanded
+                    ? "min(560px, calc(100vh - 140px))"
+                    : timelineView === "curves"
+                      ? "min(480px, calc(100vh - 470px))"
+                      : `min(520px, calc(100vh - ${timelineHeight + 90}px))`,
+                }),
+          }}
         >
+          <button
+            type="button"
+            className="absolute top-2 right-10 z-20 h-6 px-2 rounded-[6px] text-[10.5px] bg-[var(--fill-2)] hover:bg-[var(--fill)] pointer-events-auto"
+            onClick={() => undockPanel("copilot")}
+            data-tip="Float panel"
+          >
+            Float
+          </button>
           <PanelBoundary name="Copilot" onError={() => autosave("error")}>
             <AiAgentPanel
-              onExport={handleRunExport}
+              onExport={handleExportAction}
               onSave={handleSaveProject}
               onOpenBudget={() => {
                 setInspectorOpen(true);
@@ -1493,6 +1968,142 @@ export function StudioApp() {
           </PanelBoundary>
         </div>
       )}
+
+      {leftPaneOpen && panelMode.left === "float" && (
+        <FloatingPanel
+          id="left"
+          title="Tool options"
+          rect={floatRects.left}
+          onRectChange={(r) => setFloatRect("left", r)}
+          onDock={() => dockPanel("left")}
+          onDragZones={onFloatDragZones}
+        >
+          <LeftToolOptionsPane
+            onImported={async (project) =>
+              (await requestOpen({ kind: "imported", id: project.id, title: project.title, project })) === "confirm"
+                ? "Save or discard your changes to open it."
+                : "Opened and auto-rigged."
+            }
+            onShipToUnity={handleExportAction}
+            onHidePane={() => setLeftPaneOpen(false)}
+            exportData={exportData}
+            isExporting={isExporting}
+            onDownloadZip={handleDownloadZip}
+            onExportWebM={handleExportTransparentWebM}
+            onUnityPreview={() => setUnityPreviewOpen(true)}
+            onOpenSymbol={(role, title) => void requestOpen({ kind: "symbol", id: role as never, title })}
+          />
+        </FloatingPanel>
+      )}
+
+      {inspectorOpen && panelMode.inspector === "float" && (
+        <FloatingPanel
+          id="inspector"
+          title="Inspector"
+          rect={floatRects.inspector}
+          onRectChange={(r) => setFloatRect("inspector", r)}
+          onDock={() => dockPanel("inspector")}
+          onDragZones={onFloatDragZones}
+        >
+          <aside className="flex flex-col min-h-0 h-full bg-transparent">
+            <div className="p-2.5 shrink-0">
+              <div className="segmented" role="tablist">
+                {(
+                  [
+                    ["layers", "Layers"],
+                    ["bones", "Bones"],
+                    ["history", "History"],
+                    ["budget", "Budget"],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button key={id} role="tab" aria-pressed={inspectorTab === id} onClick={() => setInspectorTab(id)}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto px-2.5 pb-2.5">
+              {inspectorTab === "layers" && (
+                <ul className="space-y-0.5">
+                  {reversedLayers.map((part) => (
+                    <li
+                      key={part.name}
+                      onClick={() => selectPart(part.name)}
+                      className={`flex items-center gap-2 min-h-9 px-2 rounded-[8px] cursor-default ${
+                        part.name === selectedPart ? "bg-[var(--accent)] text-white" : "hover:bg-[var(--fill-3)]"
+                      }`}
+                    >
+                      <span className="text-[13px] truncate">{part.name}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {inspectorTab === "bones" && (
+                <ul className="space-y-0.5">
+                  {project.bones.map((bone, idx) => (
+                    <li
+                      key={bone.name}
+                      onClick={() => selectBone(bone.name)}
+                      className={`flex items-center gap-2 h-8 px-2 rounded-[8px] cursor-default ${
+                        bone.name === selectedBone ? "bg-[var(--accent)] text-white" : "hover:bg-[var(--fill-3)]"
+                      }`}
+                    >
+                      <span
+                        className="h-2 w-2 rounded-full shrink-0"
+                        style={{ backgroundColor: bone.color ?? RIG_BONE_PALETTE[idx % RIG_BONE_PALETTE.length] }}
+                      />
+                      <span className="text-[13px] truncate">{bone.name}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {inspectorTab === "history" && (
+                <ul className="space-y-0.5">
+                  {history.map((snap, idx) => (
+                    <li
+                      key={snap.id}
+                      onClick={() => jumpToHistory(idx)}
+                      className={`flex items-center justify-between h-8 px-2 rounded-[8px] cursor-default ${
+                        idx === historyIndex ? "bg-[var(--accent)] text-white" : "hover:bg-[var(--fill-3)]"
+                      }`}
+                    >
+                      <span className="text-[13px] truncate">{snap.label}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {inspectorTab === "budget" && <BudgetPanel />}
+            </div>
+          </aside>
+        </FloatingPanel>
+      )}
+
+      {showAiCopilot && panelMode.copilot === "float" && (
+        <FloatingPanel
+          id="copilot"
+          title="Copilot"
+          rect={floatRects.copilot}
+          onRectChange={(r) => setFloatRect("copilot", r)}
+          onDock={() => dockPanel("copilot")}
+          onDragZones={onFloatDragZones}
+        >
+          <AiAgentPanel
+            onExport={handleExportAction}
+            onSave={handleSaveProject}
+            onOpenBudget={() => {
+              setInspectorOpen(true);
+              setInspectorTab("budget");
+            }}
+            onOpenProject={openProjectByName}
+            onOpenSymbol={async (role, title) =>
+              (await requestOpen({ kind: "symbol", id: role, title })) === "confirm" ? `Save or discard your changes to open ${title}` : `Opened ${title}`
+            }
+            onHidePane={() => setShowAiCopilot(false)}
+          />
+        </FloatingPanel>
+      )}
+
+      <DockDropZones active={dockDrag.active} over={dockDrag.over} />
 
       {pendingOpen && (
         <UnsavedChangesDialog
@@ -1537,6 +2148,16 @@ export function StudioApp() {
       )}
 
       <UserManualModal isOpen={showUserManual} onClose={() => setShowUserManual(false)} onTriggerExport={handleRunExport} />
+      <PreferencesModal />
+      {exportData && (
+        <UnityPreviewModal
+          open={unityPreviewOpen}
+          onClose={() => setUnityPreviewOpen(false)}
+          sheetDataUrl={exportData.spriteSheetDataUrl}
+          sheetJson={exportData.spriteSheetJson}
+          title={project.title}
+        />
+      )}
     </div>
   );
 }

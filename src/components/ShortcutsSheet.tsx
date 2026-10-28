@@ -1,20 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { COMMANDS, formatCombo, isMacPlatform, MOUSE_GESTURES, UNSUPPORTED_SPINE_KEYS, type KeyGroup } from "@/core/keymap";
+import { formatCombo, isMacPlatform, MOUSE_GESTURES, resolveCommands, UNSUPPORTED_SPINE_KEYS, type KeyGroup } from "@/core/keymap";
+import { usePreferencesStore } from "@/store/usePreferencesStore";
 
-const GROUPS: KeyGroup[] = ["Tools", "Keying", "Playback", "Layers", "Edit", "File", "Panels"];
+const GROUPS: KeyGroup[] = ["Tools", "Keying", "Playback", "Layers", "View", "Edit", "File", "Panels"];
 
 /** Keyboard reference generated from the keymap, so it always matches what the keys do. */
 export function ShortcutsSheet() {
   const [mac, setMac] = useState(true);
+  const overrides = usePreferencesStore((s) => s.shortcutOverrides);
+  const commands = resolveCommands(overrides);
   useEffect(() => setMac(isMacPlatform()), []);
 
   return (
     <div className="space-y-4">
       <p className="text-[12.5px] leading-snug text-[var(--label-2)]">
         Shortcuts follow Spine&apos;s defaults, so Spine muscle memory works here. Keys marked <span className="text-[var(--label)]">Kinetic</span>{" "}
-        are for tools Spine doesn&apos;t have and use keys Spine leaves free.
+        are for tools Spine doesn&apos;t have and use keys Spine leaves free. Customize in Preferences (⌘,).
       </p>
 
       <div className="grid grid-cols-2 gap-x-6 gap-y-4">
@@ -22,7 +25,7 @@ export function ShortcutsSheet() {
           <section key={group} aria-label={group}>
             <h3 className="section-title mb-1.5">{group}</h3>
             <ul className="space-y-0.5">
-              {COMMANDS.filter((c) => c.group === group).map((c) => (
+              {commands.filter((c) => c.group === group).map((c) => (
                 <li key={c.id} className="flex items-start gap-3 py-1 border-b border-[var(--separator)] last:border-0">
                   <span className="w-24 shrink-0 flex flex-wrap gap-1">
                     {c.keys.slice(0, c.id.startsWith("nudge.") ? 1 : 2).map((k) => (

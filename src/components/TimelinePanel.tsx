@@ -224,8 +224,60 @@ function DopeSheet({ clip, selected, onSelect }: { clip: AnimationClip; selected
     onSelect(null);
   };
 
+  const events = clip.events ?? [];
+  const deleteAnimationEvent = useStudioStore((s) => s.deleteAnimationEvent);
+  const addAnimationEventAtCurrentTime = useStudioStore((s) => s.addAnimationEventAtCurrentTime);
+
   return (
     <div className="flex-1 overflow-y-auto px-3 pb-2">
+      {/* Event track */}
+      <div className="flex items-center gap-3 h-7 rounded-[6px] px-2 mb-1 bg-[var(--fill-3)]/60">
+        <span className="w-32 text-[11px] font-semibold text-[var(--label-2)] shrink-0">Events</span>
+        <div className="relative flex-1 h-full">
+          <div className="absolute inset-x-0 top-1/2 h-px bg-[var(--separator)] pointer-events-none" />
+          <RowPlayhead duration={duration} />
+          {events.map((ev) => (
+            <button
+              key={`${ev.time}-${ev.name}`}
+              type="button"
+              title={`${ev.name} @ ${ev.time.toFixed(2)}s · click to seek · double-click to rename · ⌥-click to delete`}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (e.altKey) {
+                  deleteAnimationEvent(ev.time, ev.name);
+                  return;
+                }
+                setIsPlaying(false);
+                setCurrentTime(ev.time);
+              }}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                const next = window.prompt("Event name", ev.name);
+                if (!next || next === ev.name) return;
+                editActiveClip((c) => {
+                  const rest = (c.events ?? []).filter((x) => !(x.time === ev.time && x.name === ev.name));
+                  return {
+                    ...c,
+                    events: [...rest, { ...ev, name: next.trim() }].sort((a, b) => a.time - b.time),
+                  };
+                }, `Renamed event to ${next.trim()}`);
+              }}
+              style={{ left: `${Math.max(0, Math.min(100, (ev.time / duration) * 100))}%` }}
+              className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 h-3 w-3 rotate-45 bg-[#ff9f0a] border border-black/40 hover:scale-125 transition-transform"
+              aria-label={`Event ${ev.name}`}
+            />
+          ))}
+        </div>
+        <button
+          type="button"
+          className="h-6 px-2 rounded-[6px] text-[10.5px] bg-[var(--fill-2)] hover:bg-[var(--fill)] shrink-0"
+          onClick={() => addAnimationEventAtCurrentTime("OnHit")}
+          data-tip="Add OnHit at playhead"
+        >
+          + Event
+        </button>
+      </div>
+
       {project.bones.map((bone, idx) => {
         const keys = clip.boneTracks[bone.name] ?? [];
         const col = bone.color ?? RIG_BONE_PALETTE[idx % RIG_BONE_PALETTE.length];
